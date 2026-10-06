@@ -51,6 +51,19 @@ gasem boot.gsm -o boot.bin
 | [`examples/do.gsm`](examples/do.gsm)       | выражения `do` со строками и числами, локальные метки, `call`  |
 | [`examples/pmode.gsm`](examples/pmode.gsm) | `mov a20 - 1`, таблица GDT, переход в 32-битный защищённый режим |
 
+## GasemOS — операционная система на Gasem
+
+В папке [`os/`](os/) — маленькая 32-битная ОС, написанная на Gasem: загрузчик,
+защищённый режим, прерывания, клавиатура, таймер, командная оболочка и игра
+«Змейка». Подробности — в [`os/README.md`](os/README.md).
+
+```sh
+python3 -m gasem os/gasemos.gsm -o gasemos.img
+qemu-system-i386 -drive format=raw,file=gasemos.img
+```
+
+![GasemOS](os/screenshots/2-help.png)
+
 ---
 
 # Документация языка
@@ -367,3 +380,5 @@ python3 -m unittest discover -s tests
 - `tests/test_boot.py` — примеры запускаются в эмуляторе x86 и проверяется, что
   они напечатали / записали в видеопамять (нужен `pip install unicorn`, иначе
   пропускается).
+- `tests/test_os.py` — GasemOS собирается, загружается в QEMU и выполняет
+  команды (пропускается, если QEMU не установлен).

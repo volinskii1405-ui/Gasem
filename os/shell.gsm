@@ -1,0 +1,570 @@
+; =====================================================================
+;  Командная оболочка GasemOS.
+; =====================================================================
+
+b 32
+LINE_MAX = 76
+PROMPT_ATTR = 0x0A               ; светло-зелёный
+
+line_buf b-80
+
+shell:
+    mov bl - PROMPT_ATTR
+    mov esi - prompt
+    call puts_attr
+    call readline
+    call execute
+    jmp shell
+
+prompt b: "gasem> " - 0
+
+; readline: прочитать строку с клавиатуры в line_buf (с забоем)
+readline:
+    pushad
+    xor ecx - ecx                ; длина строки
+.key:
+    call getchar
+    cmp al - 10
+    jfe .enter
+    cmp al - 8
+    jfe .backspace
+    cmp al - ' '
+    jfb .key                     ; прочие управляющие (Tab, Esc) — пропуск
+    cmp al - '~'
+    jfa .key                     ; стрелки и др. — пропуск
+    cmp ecx - LINE_MAX
+    jfae .key
+    mov [line_buf+ecx] - al
+    inc ecx
+    call putc
+    jmp .key
+.backspace:
+    chk ecx - ecx
+    jfz .key
+    dec ecx
+    call putc
+    jmp .key
+.enter:
+    mov byte [line_buf+ecx] - 0
+    call putc
+    popad
+    ret
+
+; execute: найти команду в таблице и выполнить её
+execute:
+    pushad
+    mov esi - line_buf
+    call skip_spaces
+    cmp byte [esi] - 0
+    jfe .done
+    mov edx - commands
+.next:
+    mov edi - [edx]
+    chk edi - edi
+    jfz .unknown
+    call cmd_match
+    jfz .found
+    add edx - 8
+    jmp .next
+.found:
+    mov esi - ebx                ; esi = аргументы команды
+    call [edx+4]
+.done:
+    popad
+    ret
+.unknown:
+    mov bl - 0x0C
+    push esi
+    mov esi - msg_unknown
+    call puts_attr
+    pop esi
+.word:                           ; печатаем первое слово ввода
+    nxtb
+    chk al - al
+    jfz .hint
+    cmp al - ' '
+    jfe .hint
+    call putc
+    jmp .word
+.hint:
+    mov esi - msg_unknown2
+    call puts
+    popad
+    ret
+
+msg_unknown  b: "Unknown command: " - 0
+msg_unknown2 b: 10 - "Type 'help' to see the list of commands." - 10 - 0
+
+; cmd_match: совпадает ли начало строки esi с командой edi?
+;            ZF=1 — да, ebx = начало аргументов. Портит eax.
+cmd_match:
+    push esi
+    push edi
+.cmp:
+    mov al - [edi]
+    chk al - al
+    jfz .end_of_name
+    cmp al - [esi]
+    jfne .no
+    inc esi
+    inc edi
+    jmp .cmp
+.end_of_name:
+    mov al - [esi]
+    cmp al - ' '
+    jfe .yes
+    chk al - al
+    jfnz .no
+.yes:
+    call skip_spaces
+    mov ebx - esi
+    pop edi
+    pop esi
+    xor eax - eax                ; ZF=1
+    ret
+.no:
+    pop edi
+    pop esi
+    or eax - 1                   ; ZF=0
+    ret
+
+; skip_spaces: пропустить пробелы в строке esi
+skip_spaces:
+    cmp byte [esi] - ' '
+    jfne .done
+    inc esi
+    jmp skip_spaces
+.done:
+    ret
+
+; parse_num: десятичное число из строки esi → eax; CF=1, если цифр нет
+parse_num:
+    push ebx
+    push ecx
+    xor eax - eax
+    xor ecx - ecx
+.digit:
+    movzx ebx - byte [esi]
+    sub bl - '0'
+    cmp bl - 9
+    jfa .end
+    imul eax - eax - 10
+    add eax - ebx
+    inc esi
+    inc ecx
+    jmp .digit
+.end:
+    cmp ecx - 1                  ; CF=1, если ecx = 0
+    pop ecx
+    pop ebx
+    ret
+
+; ---------------------------------------------------------------------
+;  Таблица команд: адрес имени - адрес обработчика
+; ---------------------------------------------------------------------
+commands:
+    d: s_help - cmd_help
+    d: s_clear - cmd_clear
+    d: s_about - cmd_about
+    d: s_echo - cmd_echo
+    d: s_calc - cmd_calc
+    d: s_color - cmd_color
+    d: s_time - cmd_time
+    d: s_uptime - cmd_uptime
+    d: s_mem - cmd_mem
+    d: s_cpu - cmd_cpu
+    d: s_snake - snake_game
+    d: s_crash - cmd_crash
+    d: s_reboot - cmd_reboot
+    d: s_shutdown - cmd_shutdown
+    d: 0
+
+s_help     b: "help" - 0
+s_clear    b: "clear" - 0
+s_about    b: "about" - 0
+s_echo     b: "echo" - 0
+s_calc     b: "calc" - 0
+s_color    b: "color" - 0
+s_time     b: "time" - 0
+s_uptime   b: "uptime" - 0
+s_mem      b: "mem" - 0
+s_cpu      b: "cpu" - 0
+s_snake    b: "snake" - 0
+s_crash    b: "crash" - 0
+s_reboot   b: "reboot" - 0
+s_shutdown b: "shutdown" - 0
+
+; ---- help
+cmd_help:
+    mov esi - help_text
+    jmp puts
+
+help_text:
+    b: "Commands:" - 10
+    b: "  help              this list" - 10
+    b: "  clear             clear the screen" - 10
+    b: "  about             about GasemOS" - 10
+    b: "  echo <text>       print a line of text" - 10
+    b: "  calc <a><op><b>   integer calculator, op: + - * / %" - 10
+    b: "  color <1-15>      change the text color" - 10
+    b: "  time              date and time from the RTC" - 10
+    b: "  uptime            time since boot" - 10
+    b: "  mem               installed memory" - 10
+    b: "  cpu               processor information (CPUID)" - 10
+    b: "  snake             play Snake (arrows or WASD, Q - quit)" - 10
+    b: "  crash             divide by zero to test the exception handler" - 10
+    b: "  reboot            restart the computer" - 10
+    b: "  shutdown          power off (ACPI, works in QEMU)" - 10 - 0
+
+; ---- clear
+cmd_clear:
+    jmp clear_screen
+
+; ---- about
+cmd_about:
+    mov bl - 0x0B
+    do "[os_name] + ' ' + [os_version]" - esi
+    call puts_attr
+    mov esi - about1
+    call puts
+    mov eax - kernel_end-kernel_start
+    call print_dec
+    mov esi - about2
+    call puts
+    mov eax - KERNEL_SECTORS
+    call print_dec
+    mov esi - about3
+    call puts
+    ret
+
+about1 b: " - a tiny operating system written in Gasem." - 10 - "  Kernel size: " - 0
+about2 b: " bytes (" - 0
+about3 b: " disk sectors) + 512-byte boot sector." - 10
+       b: "  32-bit protected mode, IDT, PIC, PIT timer (100 Hz), PS/2 keyboard," - 10
+       b: "  VGA text console, CMOS real-time clock." - 10 - 0
+
+; ---- echo
+cmd_echo:
+    call puts
+    jmp newline
+
+; ---- calc: a op b
+cmd_calc:
+    call parse_num
+    jfc .usage
+    mov ebx - eax                ; первое число
+    call skip_spaces
+    mov cl - [esi]               ; операция
+    inc esi
+    call skip_spaces
+    call parse_num
+    jfc .usage
+    xchg eax - ebx               ; eax = a, ebx = b
+    cmp cl - '+'
+    jfe .add
+    cmp cl - '-'
+    jfe .sub
+    cmp cl - '*'
+    jfe .mul
+    cmp cl - '/'
+    jfe .div
+    cmp cl - '%'
+    jfe .div
+.usage:
+    mov esi - calc_usage
+    jmp puts
+.add:
+    add eax - ebx
+    jmp .print
+.sub:
+    sub eax - ebx
+    jmp .print
+.mul:
+    imul eax - ebx
+    jmp .print
+.div:
+    chk ebx - ebx
+    jfz .by_zero
+    xor edx - edx
+    div ebx
+    cmp cl - '/'
+    jfe .print
+    mov eax - edx
+.print:
+    push eax
+    mov esi - calc_eq
+    call puts
+    pop eax
+    call print_int
+    jmp newline
+.by_zero:
+    mov bl - 0x0C
+    mov esi - calc_zero
+    jmp puts_attr
+
+calc_usage b: "Usage: calc 6*7   (operations: + - * / %)" - 10 - 0
+calc_eq    b: "= " - 0
+calc_zero  b: "Error: division by zero" - 10 - 0
+
+; ---- color N
+cmd_color:
+    call parse_num
+    jfc .usage
+    chk eax - eax
+    jfz .usage
+    cmp eax - 15
+    jfa .usage
+    mov [cur_attr] - al
+    mov esi - color_ok
+    jmp puts
+.usage:
+    mov esi - color_usage
+    jmp puts
+
+color_ok    b: "Text color changed." - 10 - 0
+color_usage b: "Usage: color <1-15>, e.g. 'color 14' for yellow" - 10 - 0
+
+; ---- time: дата и время из CMOS (в формате BCD)
+cmd_time:
+    cli
+.wait:                           ; ждём, пока часы не обновляются
+    mov al - 0x0A
+    call cmos_read
+    chk al - 0x80
+    jfnz .wait
+    mov al - 9                   ; год
+    call cmos_read
+    mov [rtc_buf] - al
+    mov al - 8                   ; месяц
+    call cmos_read
+    mov [rtc_buf+1] - al
+    mov al - 7                   ; день
+    call cmos_read
+    mov [rtc_buf+2] - al
+    mov al - 4                   ; часы
+    call cmos_read
+    mov [rtc_buf+3] - al
+    mov al - 2                   ; минуты
+    call cmos_read
+    mov [rtc_buf+4] - al
+    mov al - 0                   ; секунды
+    call cmos_read
+    mov [rtc_buf+5] - al
+    sti
+    mov esi - time_msg
+    call puts
+    mov al - [rtc_buf]
+    call print_hex2
+    mov al - '-'
+    call putc
+    mov al - [rtc_buf+1]
+    call print_hex2
+    mov al - '-'
+    call putc
+    mov al - [rtc_buf+2]
+    call print_hex2
+    mov al - ' '
+    call putc
+    mov al - [rtc_buf+3]
+    call print_hex2
+    mov al - ':'
+    call putc
+    mov al - [rtc_buf+4]
+    call print_hex2
+    mov al - ':'
+    call putc
+    mov al - [rtc_buf+5]
+    call print_hex2
+    mov esi - time_utc
+    jmp puts
+
+rtc_buf  b-6
+time_msg b: "RTC: 20" - 0
+time_utc b: " (UTC)" - 10 - 0
+
+; ---- uptime
+cmd_uptime:
+    mov esi - up_msg
+    call puts
+    mov eax - [ticks]
+    xor edx - edx
+    mov ecx - 100
+    div ecx                      ; eax = секунды
+    push eax
+    xor edx - edx
+    mov ecx - 60
+    div ecx                      ; eax = минуты, edx = секунды
+    call print_dec
+    mov esi - up_min
+    call puts
+    mov eax - edx
+    call print_dec
+    mov esi - up_sec
+    call puts
+    pop eax
+    mov eax - [ticks]
+    call print_dec
+    mov esi - up_ticks
+    jmp puts
+
+up_msg   b: "Up for " - 0
+up_min   b: " min " - 0
+up_sec   b: " sec (timer ticks: " - 0
+up_ticks b: ")" - 10 - 0
+
+; ---- mem: объём памяти из CMOS (как его сообщает BIOS)
+cmd_mem:
+    mov al - 0x35                ; память выше 16 МБ, блоками по 64 КБ
+    call cmos_read
+    mov ah - al
+    mov al - 0x34
+    call cmos_read
+    movzx eax - ax
+    chk eax - eax
+    jfz .small
+    shr eax - 4                  ; 64 КБ * 16 = 1 МБ
+    add eax - 16
+    jmp .print
+.small:
+    mov al - 0x31                ; память выше 1 МБ, в килобайтах
+    call cmos_read
+    mov ah - al
+    mov al - 0x30
+    call cmos_read
+    movzx eax - ax
+    shr eax - 10
+    inc eax
+.print:
+    mov esi - mem_msg
+    call puts
+    call print_dec
+    mov esi - mem_mb
+    jmp puts
+
+mem_msg b: "Memory: " - 0
+mem_mb  b: " MB" - 10 - 0
+
+; ---- cpu: производитель и название процессора (CPUID)
+cmd_cpu:
+    pushad
+    xor eax - eax
+    cpuid
+    mov [cpu_buf] - ebx
+    mov [cpu_buf+4] - edx
+    mov [cpu_buf+8] - ecx
+    mov byte [cpu_buf+12] - 0
+    mov esi - cpu_vendor
+    call puts
+    mov esi - cpu_buf
+    call puts
+    call newline
+    mov eax - 0x80000000         ; есть ли строка с названием?
+    cpuid
+    cmp eax - 0x80000004
+    jfb .features
+    mov edi - cpu_buf
+    mov ebp - 0x80000002
+.brand:
+    mov eax - ebp
+    cpuid
+    mov [edi] - eax
+    mov [edi+4] - ebx
+    mov [edi+8] - ecx
+    mov [edi+12] - edx
+    add edi - 16
+    inc ebp
+    cmp ebp - 0x80000004
+    jfbe .brand
+    mov byte [edi] - 0
+    mov esi - cpu_brand
+    call puts
+    mov esi - cpu_buf
+    call skip_spaces
+    call puts
+    call newline
+.features:
+    mov eax - 1
+    cpuid
+    mov esi - cpu_feat
+    call puts
+    mov esi - feature_names
+    xor ecx - ecx
+.feat:
+    mov eax - [esi]              ; номер бита
+    cmp eax - 0xFF
+    jfe .end
+    bt edx - eax
+    jfnc .skip
+    push esi
+    add esi - 4
+    call puts
+    pop esi
+.skip:
+    add esi - 12
+    jmp .feat
+.end:
+    call newline
+    popad
+    ret
+
+cpu_buf    b-52
+cpu_vendor b: "Vendor:   " - 0
+cpu_brand  b: "Model:    " - 0
+cpu_feat   b: "Features:" - 0
+feature_names:                   ; бит в edx, затем имя (ровно 8 байт)
+    d: 0
+    b/ 8: " fpu"
+    d: 4
+    b/ 8: " tsc"
+    d: 6
+    b/ 8: " pae"
+    d: 8
+    b/ 8: " cx8"
+    d: 15
+    b/ 8: " cmov"
+    d: 23
+    b/ 8: " mmx"
+    d: 25
+    b/ 8: " sse"
+    d: 26
+    b/ 8: " sse2"
+    d: 0xFF
+
+; ---- crash: деление на ноль — проверка обработчика исключений
+cmd_crash:
+    mov esi - crash_msg
+    call puts
+    xor edx - edx
+    xor eax - eax
+    div eax
+    ret
+
+crash_msg b: "Dividing by zero..." - 10 - 0
+
+; ---- reboot: сброс через контроллер клавиатуры
+cmd_reboot:
+    cli
+.wait:
+    in al - 0x64
+    chk al - 2
+    jfnz .wait
+    mov al - 0xFE
+    out 0x64 - al
+.halt:
+    hlt
+    jmp .halt
+
+; ---- shutdown: выключение через ACPI (порт QEMU)
+cmd_shutdown:
+    mov esi - shutdown_msg
+    call puts
+    mov ax - 0x2000
+    mov dx - 0x604               ; QEMU (новые версии)
+    out dx - ax
+    mov dx - 0xB004              ; QEMU (старые версии), Bochs
+    out dx - ax
+    mov esi - shutdown_fail
+    jmp puts
+
+shutdown_msg  b: "Powering off..." - 10 - 0
+shutdown_fail b: "ACPI power off is not supported on this machine." - 10 - 0

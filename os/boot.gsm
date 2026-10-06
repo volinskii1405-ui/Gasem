@@ -1,0 +1,106 @@
+; =====================================================================
+;  Загрузчик GasemOS (сектор 0, ровно 512 байт).
+;  1. Читает ядро с диска (BIOS int 13h, LBA) по адресу 0x7E00.
+;  2. Включает линию A20.
+;  3. Загружает GDT и переходит в 32-битный защищённый режим.
+;  4. Передаёт управление ядру (kernel_main).
+; =====================================================================
+
+b 16
+boot:
+    cli
+    xor ax - ax
+    mov ds - ax
+    mov es - ax
+    mov ss - ax
+    mov sp - 0x7C00
+    sti
+    mov [boot_drive] - dl       ; BIOS передаёт номер диска в dl
+
+    mov si - msg_boot
+    call bios_print
+
+    mov cx - KERNEL_SECTORS
+.load:
+    push cx
+    mov si - dap
+    mov dl - [boot_drive]
+    mov ah - 0x42               ; расширенное чтение (LBA)
+    int 0x13
+    jfc disk_error
+    add word [dap_seg] - 0x20   ; следующий сектор — на 512 байт дальше
+    inc dword [dap_lba]
+    mov ax - 0x0E2E             ; печатаем точку на каждый сектор
+    xor bx - bx
+    int 0x10
+    pop cx
+    loop .load
+
+    mov si - msg_ok
+    call bios_print
+
+    mov a20 - 1                 ; абстракция Gasem: включить A20
+
+    cli
+    lgdt [gdt_ptr]
+    mov eax - cr0
+    or eax - 1                  ; бит PE — защищённый режим
+    mov cr0 - eax
+    jmp CODE_SEL:pm_entry       ; дальний переход загружает cs
+
+disk_error:
+    mov si - msg_disk_err
+    call bios_print
+.halt:
+    hlt
+    jmp .halt
+
+; bios_print: печать строки si через BIOS
+bios_print:
+    mov ah - 0x0E
+    xor bx - bx
+.next:
+    nxtb
+    chk al - al
+    jfz .done
+    int 0x10
+    jmp .next
+.done:
+    ret
+
+b 32
+pm_entry:
+    mov ax - DATA_SEL
+    mov ds - ax
+    mov es - ax
+    mov fs - ax
+    mov gs - ax
+    mov ss - ax
+    mov esp - STACK_TOP
+    jmp kernel_main
+
+; ---- данные загрузчика
+boot_drive   b: 0
+msg_boot     b: "GasemOS: loading kernel" - 0
+msg_ok       b: " OK" - 13 - 10 - 0
+msg_disk_err b: " disk error!" - 0
+
+dap:                            ; пакет для int 13h, ah=42h
+             b: 0x10 - 0        ; размер пакета
+             w: 1               ; секторов за раз
+             w: 0               ; смещение буфера
+dap_seg      w: 0x07E0          ; сегмент буфера (0x07E0:0 = 0x7E00)
+dap_lba      d: 1 - 0           ; номер сектора на диске
+
+align 8 - 0
+gdt:                            ; глобальная таблица дескрипторов
+    q: 0                        ; нулевой дескриптор
+    q: 0x00CF9A000000FFFF       ; 0x08: код, база 0, предел 4 ГБ, 32 бита
+    q: 0x00CF92000000FFFF       ; 0x10: данные, база 0, предел 4 ГБ
+gdt_end:
+gdt_ptr:
+    w: gdt_end-gdt-1
+    d: gdt
+
+&& 510-($-$$) b: 0
+w: 0xAA55

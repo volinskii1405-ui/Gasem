@@ -1,0 +1,36 @@
+; =====================================================================
+;  Ядро GasemOS: точка входа и инициализация.
+;  Сюда загрузчик передаёт управление уже в 32-битном защищённом режиме.
+; =====================================================================
+
+b 32
+kernel_main:
+    call clear_screen
+    call status_init
+    call idt_init
+    call pic_init
+    call pit_init
+    sti                          ; с этого момента работают таймер и клавиатура
+
+    mov bl - 0x0B                ; голубой
+    mov esi - logo
+    call puts_attr
+    mov esi - welcome
+    call puts
+    jmp shell
+
+os_name    b: "GasemOS" - 0
+os_version b: "0.1" - 0
+
+logo:
+    b: 10
+    b: "     ____                             ___  ____" - 10
+    b: "    / ___| __ _ ___  ___ _ __ ___    / _ \\/ ___|" - 10
+    b: "   | |  _ / _` / __|/ _ \\ '_ ` _ \\  | | | \\___ \\" - 10
+    b: "   | |_| | (_| \\__ \\  __/ | | | | | | |_| |___) |" - 10
+    b: "    \\____|\\__,_|___/\\___|_| |_| |_|  \\___/|____/" - 10
+    b: 10 - 0
+
+welcome:
+    b: "   A tiny 32-bit operating system written in the Gasem language." - 10
+    b: "   Type 'help' to see the list of commands." - 10 - 10 - 0

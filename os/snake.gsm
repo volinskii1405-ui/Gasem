@@ -1,0 +1,279 @@
+; =====================================================================
+;  Игра «Змейка». Стрелки или WASD — поворот, Q или Esc — выход.
+;  Поле — строки 3..23, столбцы 1..78 внутри рамки.
+;  Столкновения определяются по содержимому видеопамяти.
+; =====================================================================
+
+b 32
+SNAKE_MASK  = 2047               ; кольцевой буфер на 2048 клеток
+SNAKE_SPEED = 8                  ; шаг каждые 8 тиков (12.5 шага в секунду)
+BODY_CELL   = 0x02DB             ; █ тёмно-зелёный
+HEAD_CELL   = 0x0ADB             ; █ светло-зелёный
+FOOD_CELL   = 0x0C04             ; ♦ красный
+FOOD_CHAR   = 0x04
+EMPTY_CELL  = 0x0720
+BORDER_ATTR = 0x0E               ; жёлтый
+
+sn_head    d: 0                  ; индексы в кольцевом буфере
+sn_tail    d: 0
+sn_dir     d: 1                  ; смещение головы за шаг: ±1 или ±80
+sn_newdir  d: 1
+sn_grow    d: 0                  ; на сколько клеток ещё вырасти
+sn_score   d: 0
+sn_next    d: 0                  ; тик следующего шага
+sn_quit    b: 0
+rand_seed  d: 0
+
+snake_game:
+    pushad
+    call cursor_hide
+    call clear_screen
+    call sn_draw_field
+    mov dword [sn_score] - 0
+    mov dword [sn_grow] - 0
+    mov dword [sn_dir] - 1
+    mov dword [sn_newdir] - 1
+    mov byte [sn_quit] - 0
+    rdtsc                        ; случайное зерно
+    add eax - [ticks]
+    mov [rand_seed] - eax
+
+    ; начальная змейка: 5 клеток в строке 13, столбцы 20..24
+    mov dword [sn_tail] - 0
+    mov dword [sn_head] - 4
+    mov ecx - 0
+    mov eax - 13*80+20
+.init:
+    mov [SNAKE_BUF+ecx*2] - ax
+    mov word [VGA+eax*2] - BODY_CELL
+    inc eax
+    inc ecx
+    cmp ecx - 5
+    jfb .init
+    mov word [VGA+eax*2-2] - HEAD_CELL
+    call sn_place_food
+    call sn_draw_score
+    mov eax - [ticks]
+    mov [sn_next] - eax
+
+.loop:
+    mov eax - [ticks]
+    cmp eax - [sn_next]
+    jfge .step
+    call kb_poll
+    jfz .idle
+    call sn_key
+    cmp byte [sn_quit] - 0
+    jfne .exit
+    jmp .loop
+.idle:
+    hlt
+    jmp .loop
+
+.step:
+    add dword [sn_next] - SNAKE_SPEED
+    mov eax - [sn_newdir]
+    mov [sn_dir] - eax
+    mov ebx - [sn_head]
+    movzx eax - word [SNAKE_BUF+ebx*2]
+    add eax - [sn_dir]           ; eax = новая клетка головы
+    mov dl - [VGA+eax*2]
+    cmp dl - ' '
+    jfe .move
+    cmp dl - FOOD_CHAR
+    jfne .dead
+    inc dword [sn_score]         ; съели еду
+    add dword [sn_grow] - 3
+    call sn_draw_score
+    push eax
+    mov word [VGA+eax*2] - EMPTY_CELL
+    call sn_place_food
+    pop eax
+.move:
+    movzx ecx - word [SNAKE_BUF+ebx*2]
+    mov word [VGA+ecx*2] - BODY_CELL     ; старая голова становится телом
+    inc ebx
+    and ebx - SNAKE_MASK
+    mov [sn_head] - ebx
+    mov [SNAKE_BUF+ebx*2] - ax
+    mov word [VGA+eax*2] - HEAD_CELL
+    cmp dword [sn_grow] - 0
+    jfe .cut_tail
+    dec dword [sn_grow]
+    jmp .loop
+.cut_tail:
+    mov ebx - [sn_tail]
+    movzx ecx - word [SNAKE_BUF+ebx*2]
+    mov word [VGA+ecx*2] - EMPTY_CELL
+    inc ebx
+    and ebx - SNAKE_MASK
+    mov [sn_tail] - ebx
+    jmp .loop
+
+.dead:
+    mov eax - 12
+    mov ebx - 27
+    call set_pos
+    mov bl - 0x4F
+    mov esi - sn_over
+    call puts_attr
+    mov al - [cur_attr]
+    mov byte [cur_attr] - 0x4F
+    push eax
+    mov eax - [sn_score]
+    call print_dec
+    mov al - ' '
+    call putc
+    call putc
+    pop eax
+    mov [cur_attr] - al
+    mov eax - [ticks]            ; пауза 1 секунда, нажатия за это время — мимо
+    add eax - 100
+.pause:
+    hlt
+    cmp eax - [ticks]
+    jfg .pause
+.flush:
+    call kb_poll
+    jfnz .flush
+    mov eax - 14
+    mov ebx - 30
+    call set_pos
+    mov bl - 0x0F
+    mov esi - sn_press
+    call puts_attr
+    call getchar
+.exit:
+    call clear_screen
+    call cursor_show
+    popad
+    ret
+
+sn_over  b: "  GAME OVER!  Score: " - 0
+sn_press b: "Press any key..." - 0
+
+; sn_key: обработать клавишу al
+sn_key:
+    pushad
+    mov ecx - -80
+    cmp al - KEY_UP
+    jfe .turn
+    cmp al - 'w'
+    jfe .turn
+    mov ecx - 80
+    cmp al - KEY_DOWN
+    jfe .turn
+    cmp al - 's'
+    jfe .turn
+    mov ecx - -1
+    cmp al - KEY_LEFT
+    jfe .turn
+    cmp al - 'a'
+    jfe .turn
+    mov ecx - 1
+    cmp al - KEY_RIGHT
+    jfe .turn
+    cmp al - 'd'
+    jfe .turn
+    cmp al - 'q'
+    jfe .quit
+    cmp al - 27
+    jfe .quit
+    jmp .done
+.turn:
+    mov eax - ecx
+    add eax - [sn_dir]           ; разворот на 180° запрещён
+    jfz .done
+    mov [sn_newdir] - ecx
+    jmp .done
+.quit:
+    mov byte [sn_quit] - 1
+.done:
+    popad
+    ret
+
+; sn_draw_field: заголовок и рамка
+sn_draw_field:
+    pushad
+    mov eax - 1
+    mov ebx - 1
+    call set_pos
+    mov bl - 0x0F
+    mov esi - sn_title
+    call puts_attr
+    ; верхняя и нижняя границы
+    mov edi - VGA+2*80*2
+    mov ax - BORDER_ATTR*256+0xC9
+    stosw
+    mov ecx - 78
+    mov al - 0xCD
+    rep stosw
+    mov al - 0xBB
+    stosw
+    mov edi - VGA+2*80*24
+    mov al - 0xC8
+    stosw
+    mov ecx - 78
+    mov al - 0xCD
+    rep stosw
+    mov al - 0xBC
+    stosw
+    ; боковые границы
+    mov edi - VGA+2*80*3
+    mov ecx - 21
+    mov al - 0xBA
+.side:
+    mov [edi] - ax
+    mov [edi+2*79] - ax
+    add edi - 160
+    loop .side
+    popad
+    ret
+
+sn_title b: "SNAKE    Score: 0          arrows / WASD - move,  Q - quit" - 0
+
+; sn_draw_score: обновить счёт в заголовке
+sn_draw_score:
+    pushad
+    mov eax - 1
+    mov ebx - 17
+    call set_pos
+    mov al - [cur_attr]
+    push eax
+    mov byte [cur_attr] - 0x0F
+    mov eax - [sn_score]
+    call print_dec
+    pop eax
+    mov [cur_attr] - al
+    popad
+    ret
+
+; sn_place_food: положить еду в случайную пустую клетку
+sn_place_food:
+    pushad
+.try:
+    call rand
+    xor edx - edx
+    mov ecx - 21*78
+    div ecx                      ; edx = номер клетки
+    mov eax - edx
+    xor edx - edx
+    mov ecx - 78
+    div ecx                      ; eax = строка 0..20, edx = столбец 0..77
+    add eax - 3
+    imul eax - eax - 80
+    lea eax - [eax+edx+1]
+    cmp word [VGA+eax*2] - EMPTY_CELL
+    jfne .try
+    mov word [VGA+eax*2] - FOOD_CELL
+    popad
+    ret
+
+; rand: псевдослучайное число → eax (линейный конгруэнтный генератор)
+rand:
+    mov eax - [rand_seed]
+    imul eax - eax - 1103515245
+    add eax - 12345
+    mov [rand_seed] - eax
+    shr eax - 8
+    ret

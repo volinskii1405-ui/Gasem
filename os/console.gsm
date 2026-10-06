@@ -1,0 +1,355 @@
+; =====================================================================
+;  Текстовая консоль VGA 80x25.
+;  Строка 0 — строка состояния, строки 1..24 — консоль с прокруткой.
+;  Все подпрограммы сохраняют регистры (кроме явно указанных).
+; =====================================================================
+
+b 32
+cur_row  d: 1
+cur_col  d: 0
+cur_attr b: 0x07                 ; светло-серый на чёрном
+
+; clear_screen: очистить консоль (строки 1..24), курсор в начало
+clear_screen:
+    pushad
+    mov edi - VGA+160
+    mov ecx - 80*24
+    mov ah - [cur_attr]
+    mov al - ' '
+    cld
+    rep stosw
+    mov dword [cur_row] - 1
+    mov dword [cur_col] - 0
+    call update_cursor
+    popad
+    ret
+
+; putc: вывести символ al (понимает 10 — перевод строки и 8 — забой)
+putc:
+    pushad
+    cmp al - 10
+    jfe .newline
+    cmp al - 8
+    jfe .backspace
+    mov ebx - [cur_row]
+    imul ebx - ebx - 80
+    add ebx - [cur_col]
+    mov ah - [cur_attr]
+    mov [VGA+ebx*2] - ax
+    inc dword [cur_col]
+    cmp dword [cur_col] - 80
+    jfl .done
+.newline:
+    mov dword [cur_col] - 0
+    inc dword [cur_row]
+    cmp dword [cur_row] - 25
+    jfl .done
+    call scroll
+    mov dword [cur_row] - 24
+    jmp .done
+.backspace:
+    cmp dword [cur_col] - 0
+    jfe .done
+    dec dword [cur_col]
+    mov ebx - [cur_row]
+    imul ebx - ebx - 80
+    add ebx - [cur_col]
+    mov ah - [cur_attr]
+    mov al - ' '
+    mov [VGA+ebx*2] - ax
+.done:
+    call update_cursor
+    popad
+    ret
+
+; scroll: сдвинуть строки 2..24 на одну вверх, очистить строку 24
+scroll:
+    pushad
+    cld
+    mov esi - VGA+160*2
+    mov edi - VGA+160
+    mov ecx - 160*23/4
+    rep movsd
+    mov edi - VGA+160*24
+    mov ecx - 80
+    mov ax - 0x0720
+    rep stosw
+    popad
+    ret
+
+; update_cursor: поставить мигающий курсор VGA в позицию cur_row/cur_col
+update_cursor:
+    pushad
+    mov ebx - [cur_row]
+    imul ebx - ebx - 80
+    add ebx - [cur_col]
+    mov dx - 0x3D4
+    mov al - 0x0F
+    out dx - al
+    inc dx
+    mov al - bl
+    out dx - al
+    dec dx
+    mov al - 0x0E
+    out dx - al
+    inc dx
+    mov al - bh
+    out dx - al
+    popad
+    ret
+
+; cursor_hide / cursor_show: спрятать и показать курсор
+cursor_hide:
+    push eax
+    push edx
+    mov dx - 0x3D4
+    mov al - 0x0A
+    out dx - al
+    inc dx
+    mov al - 0x20
+    out dx - al
+    pop edx
+    pop eax
+    ret
+
+cursor_show:
+    push eax
+    push edx
+    mov dx - 0x3D4
+    mov al - 0x0A
+    out dx - al
+    inc dx
+    mov al - 0x0E
+    out dx - al
+    pop edx
+    pop eax
+    ret
+
+; set_pos: перенести курсор консоли в строку eax, столбец ebx
+set_pos:
+    mov [cur_row] - eax
+    mov [cur_col] - ebx
+    jmp update_cursor
+
+; puts: вывести строку esi (до нулевого байта)
+puts:
+    push eax
+    push esi
+.next:
+    nxtb
+    chk al - al
+    jfz .done
+    call putc
+    jmp .next
+.done:
+    pop esi
+    pop eax
+    ret
+
+; puts_attr: вывести строку esi цветом bl
+puts_attr:
+    push eax
+    mov al - [cur_attr]
+    mov [cur_attr] - bl
+    call puts
+    mov [cur_attr] - al
+    pop eax
+    ret
+
+; newline: перевод строки
+newline:
+    push eax
+    mov al - 10
+    call putc
+    pop eax
+    ret
+
+; print_dec: вывести eax как десятичное число без знака
+print_dec:
+    pushad
+    mov ecx - 10
+    xor ebx - ebx
+.divide:
+    xor edx - edx
+    div ecx
+    push edx
+    inc ebx
+    chk eax - eax
+    jfnz .divide
+.out:
+    pop eax
+    add al - '0'
+    call putc
+    dec ebx
+    jfnz .out
+    popad
+    ret
+
+; print_int: вывести eax как число со знаком
+print_int:
+    push eax
+    chk eax - eax
+    jfns .positive
+    push eax
+    mov al - '-'
+    call putc
+    pop eax
+    neg eax
+.positive:
+    call print_dec
+    pop eax
+    ret
+
+; print_hex32: вывести eax как 8 шестнадцатеричных цифр
+print_hex32:
+    pushad
+    mov ecx - 8
+.digit:
+    rol eax - 4
+    push eax
+    and al - 0x0F
+    call hex_digit
+    pop eax
+    loop .digit
+    popad
+    ret
+
+; print_hex2: вывести al как 2 шестнадцатеричные цифры (и для BCD-чисел)
+print_hex2:
+    push eax
+    push eax
+    shr al - 4
+    call hex_digit
+    pop eax
+    and al - 0x0F
+    call hex_digit
+    pop eax
+    ret
+
+hex_digit:
+    push eax
+    cmp al - 10
+    jfb .decimal
+    add al - 'A'-10
+    jmp .print
+.decimal:
+    add al - '0'
+.print:
+    call putc
+    pop eax
+    ret
+
+; ---------------------------------------------------------------------
+;  Строка состояния (строка 0): название, время работы и часы RTC.
+;  Обновляется обработчиком таймера раз в секунду.
+; ---------------------------------------------------------------------
+STATUS_ATTR = 0x1F               ; белый на синем
+
+status_init:
+    pushad
+    mov edi - VGA
+    mov ecx - 80
+    mov ax - STATUS_ATTR*256+' '
+    rep stosw
+    mov ah - STATUS_ATTR
+    do "' ' + [os_name] + ' ' + [os_version] + '  |  written in Gasem'" - esi
+    mov edi - VGA
+    call vga_print
+    mov esi - st_uptime
+    mov edi - VGA+2*49
+    call vga_print
+    mov esi - st_clock
+    mov edi - VGA+2*67
+    call vga_print
+    xor eax - eax
+    call status_update
+    popad
+    ret
+
+st_uptime b: "uptime 00:00:00" - 0
+st_clock  b: "time 00:00:00" - 0
+
+; status_update: eax = секунды с момента загрузки
+status_update:
+    pushad
+    xor edx - edx
+    mov ecx - 3600
+    div ecx                      ; eax = часы, edx = остаток
+    mov edi - VGA+2*56
+    call vga_put_dec2
+    mov eax - edx
+    xor edx - edx
+    mov ecx - 60
+    div ecx                      ; eax = минуты, edx = секунды
+    mov edi - VGA+2*59
+    call vga_put_dec2
+    mov eax - edx
+    mov edi - VGA+2*62
+    call vga_put_dec2
+    mov al - 4                   ; часы RTC
+    call cmos_read
+    mov edi - VGA+2*72
+    call vga_put_bcd
+    mov al - 2                   ; минуты
+    call cmos_read
+    mov edi - VGA+2*75
+    call vga_put_bcd
+    mov al - 0                   ; секунды
+    call cmos_read
+    mov edi - VGA+2*78
+    call vga_put_bcd
+    popad
+    ret
+
+; vga_print: строка esi в видеопамять по адресу edi цветом ah
+vga_print:
+    push eax
+    push esi
+    push edi
+.next:
+    nxtb
+    chk al - al
+    jfz .done
+    stosw
+    jmp .next
+.done:
+    pop edi
+    pop esi
+    pop eax
+    ret
+
+; vga_put_dec2: две десятичные цифры числа al (0..99) по адресу edi
+vga_put_dec2:
+    push eax
+    movzx eax - al
+    mov ah - 0
+    push ecx
+    mov cl - 10
+    div cl                       ; al = десятки, ah = единицы
+    pop ecx
+    add ax - 0x3030
+    jmp vga_put_pair
+
+; vga_put_bcd: BCD-число al (например, 0x59) по адресу edi
+vga_put_bcd:
+    push eax
+    mov ah - al
+    shr al - 4
+    and ah - 0x0F
+    add ax - 0x3030
+vga_put_pair:                    ; al, ah — два символа; eax уже в стеке
+    push ecx
+    mov cl - ah
+    mov ah - STATUS_ATTR
+    mov [edi] - ax
+    mov al - cl
+    mov [edi+2] - ax
+    pop ecx
+    pop eax
+    ret
+
+; cmos_read: прочитать регистр al часов реального времени (CMOS) → al
+cmos_read:
+    out 0x70 - al
+    in al - 0x71
+    ret

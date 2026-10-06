@@ -1,0 +1,211 @@
+; =====================================================================
+;  Прерывания: таблица IDT, исключения процессора, контроллер PIC,
+;  системный таймер PIT (100 Гц).
+; =====================================================================
+
+b 32
+ticks d: 0                       ; тиков таймера с момента загрузки (по 10 мс)
+
+; idt_init: заполнить IDT и загрузить её
+idt_init:
+    pushad
+    xor ecx - ecx                ; все 256 векторов — «пустой» обработчик
+.fill:
+    mov eax - int_ignore
+    call set_gate
+    inc ecx
+    cmp ecx - 256
+    jfb .fill
+    xor ecx - ecx                ; исключения 0..31 — заглушки по 5 байт
+.exceptions:
+    lea eax - [ecx+ecx*4]
+    add eax - exc_stubs
+    call set_gate
+    inc ecx
+    cmp ecx - 32
+    jfb .exceptions
+    mov ecx - 0x20               ; IRQ 0 — таймер
+    mov eax - irq0_timer
+    call set_gate
+    mov ecx - 0x21               ; IRQ 1 — клавиатура
+    mov eax - irq1_keyboard
+    call set_gate
+    lidt [idt_ptr]
+    popad
+    ret
+
+; set_gate: вектор ecx → обработчик eax (шлюз прерывания, кольцо 0)
+set_gate:
+    push eax
+    push edi
+    lea edi - [IDT_ADDR+ecx*8]
+    mov [edi] - ax               ; младшая половина адреса
+    mov word [edi+2] - CODE_SEL
+    mov word [edi+4] - 0x8E00    ; присутствует, 32-битный шлюз прерывания
+    shr eax - 16
+    mov [edi+6] - ax             ; старшая половина адреса
+    pop edi
+    pop eax
+    ret
+
+idt_ptr:
+    w: 256*8-1
+    d: IDT_ADDR
+
+int_ignore:
+    iretd
+
+; pic_init: перенести IRQ 0..15 на векторы 0x20..0x2F, разрешить IRQ 0 и 1
+pic_init:
+    push eax
+    mov al - 0x11                ; ICW1: инициализация
+    out 0x20 - al
+    out 0xA0 - al
+    mov al - 0x20                ; ICW2: базовые векторы
+    out 0x21 - al
+    mov al - 0x28
+    out 0xA1 - al
+    mov al - 4                   ; ICW3: каскад на IRQ 2
+    out 0x21 - al
+    mov al - 2
+    out 0xA1 - al
+    mov al - 1                   ; ICW4: режим 8086
+    out 0x21 - al
+    out 0xA1 - al
+    mov al - 0xFC                ; маска: открыты только IRQ 0 и IRQ 1
+    out 0x21 - al
+    mov al - 0xFF
+    out 0xA1 - al
+    pop eax
+    ret
+
+; pit_init: таймер на 100 Гц (1193182 / 100 = 11932)
+PIT_DIVISOR = 11932
+
+pit_init:
+    push eax
+    mov al - 0x36                ; канал 0, режим 3
+    out 0x43 - al
+    mov ax - PIT_DIVISOR
+    out 0x40 - al
+    mov al - ah
+    out 0x40 - al
+    pop eax
+    ret
+
+; IRQ 0: таймер. Раз в секунду обновляет строку состояния.
+irq0_timer:
+    pushad
+    inc dword [ticks]
+    mov eax - [ticks]
+    xor edx - edx
+    mov ecx - 100
+    div ecx                      ; eax = секунды, edx = остаток
+    chk edx - edx
+    jfnz .eoi
+    call status_update
+.eoi:
+    mov al - 0x20                ; конец прерывания для PIC
+    out 0x20 - al
+    popad
+    iretd
+
+; ---------------------------------------------------------------------
+;  Исключения процессора. 32 заглушки по 5 байт: «call exc_common».
+;  Номер исключения вычисляется по адресу возврата из call.
+; ---------------------------------------------------------------------
+exc_stubs:
+&& 32 call exc_common
+
+ERROR_CODE_MASK = 0x27D00        ; исключения 8, 10..14, 17 кладут код ошибки
+
+exc_common:
+    cli
+    pop eax                      ; адрес сразу за заглушкой
+    sub eax - exc_stubs
+    xor edx - edx
+    mov ecx - 5
+    div ecx
+    dec eax
+    mov ebx - eax                ; ebx = номер исключения
+
+    mov byte [cur_attr] - 0x4F   ; белый на красном
+    call clear_screen
+    call cursor_hide
+    mov eax - 3
+    mov ecx - 0
+    xchg ebx - ecx
+    call set_pos
+    xchg ebx - ecx
+    mov esi - panic_title
+    call puts
+    mov esi - panic_exc
+    call puts
+    mov eax - ebx
+    call print_dec
+    mov al - ':'
+    call putc
+    mov al - ' '
+    call putc
+    mov esi - exc_reserved
+    cmp ebx - 20
+    jfae .named
+    mov esi - [exc_names+ebx*4]
+.named:
+    call puts
+    call newline
+
+    mov edx - ERROR_CODE_MASK
+    xor ecx - ecx                ; ecx = код ошибки (если есть)
+    bt edx - ebx
+    jfnc .no_code
+    pop ecx
+.no_code:
+    mov esi - panic_eip
+    call puts
+    pop eax                      ; eip, на котором случилось исключение
+    call print_hex32
+    mov edx - ERROR_CODE_MASK
+    bt edx - ebx
+    jfnc .halt_msg
+    mov esi - panic_code
+    call puts
+    mov eax - ecx
+    call print_hex32
+.halt_msg:
+    mov esi - panic_halt
+    call puts
+.halt:
+    hlt
+    jmp .halt
+
+panic_title  b: "   *** KERNEL PANIC ***" - 10 - 10 - 0
+panic_exc    b: "   CPU exception #" - 0
+panic_eip    b: "   EIP = 0x" - 0
+panic_code   b: "   error code = 0x" - 0
+panic_halt   b: 10 - 10 - "   The system has been halted. Restart the computer." - 10 - 0
+exc_reserved b: "Reserved" - 0
+
+exc_names:
+    d: e00 - e01 - e02 - e03 - e04 - e05 - e06 - e07 - e08 - e09
+    d: e10 - e11 - e12 - e13 - e14 - e15 - e16 - e17 - e18 - e19
+e00 b: "Divide Error" - 0
+e01 b: "Debug" - 0
+e02 b: "Non-Maskable Interrupt" - 0
+e03 b: "Breakpoint" - 0
+e04 b: "Overflow" - 0
+e05 b: "BOUND Range Exceeded" - 0
+e06 b: "Invalid Opcode" - 0
+e07 b: "Device Not Available" - 0
+e08 b: "Double Fault" - 0
+e09 b: "Coprocessor Segment Overrun" - 0
+e10 b: "Invalid TSS" - 0
+e11 b: "Segment Not Present" - 0
+e12 b: "Stack-Segment Fault" - 0
+e13 b: "General Protection Fault" - 0
+e14 b: "Page Fault" - 0
+e15 b: "Reserved" - 0
+e16 b: "x87 Floating-Point Error" - 0
+e17 b: "Alignment Check" - 0
+e18 b: "Machine Check" - 0
+e19 b: "SIMD Floating-Point Exception" - 0
