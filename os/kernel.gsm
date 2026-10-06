@@ -11,13 +11,45 @@ kernel_main:
     call pic_init
     call pit_init
     sti                          ; с этого момента работают таймер и клавиатура
+    call fs_init                 ; найти файловую систему на диске
 
     mov bl - 0x0B                ; голубой
     mov esi - logo
     call puts_attr
     mov esi - welcome
     call puts
+    call disk_info
     jmp shell
+
+; disk_info: строка о диске при загрузке
+disk_info:
+    if byte [fs_ready] = 0
+        mov esi - disk_none
+        jmp puts
+    end
+    mov esi - disk_fs
+    call puts
+    xor eax - eax                ; сколько файлов
+    mov esi - FS_DIR
+    for ecx - 0 - FS_ENTRIES
+        if byte [esi] != 0
+            inc eax
+        end
+        add esi - 32
+    end
+    call print_dec
+    mov esi - disk_files
+    call puts
+    call fs_free_blocks
+    let eax - "eax / 2"
+    call print_dec
+    mov esi - disk_free
+    jmp puts
+
+disk_fs    b: "   Disk: GasemFS, " - 0
+disk_files b: " files, " - 0
+disk_free  b: " KB free. Try 'ls' and 'cat readme.txt'." - 10 - 10 - 0
+disk_none  b: "   Disk: no file system (type 'format' to create one)." - 10 - 10 - 0
 
 os_name    b: "GasemOS" - 0
 os_version b: "0.1" - 0
@@ -33,4 +65,4 @@ logo:
 
 welcome:
     b: "   A tiny 32-bit operating system written in the Gasem language." - 10
-    b: "   Type 'help' to see the list of commands." - 10 - 10 - 0
+    b: "   Type 'help' to see the list of commands." - 10 - 0

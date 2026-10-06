@@ -1,0 +1,328 @@
+; =====================================================================
+;  GasemFS — файловая система GasemOS.
+;
+;  Расположение на диске (секторы по 512 байт, начиная с FS_START):
+;    +0      суперблок: сигнатура "GASEMFS1", число блоков и записей
+;    +1      таблица блоков: 256 записей по 2 байта (как FAT):
+;              0 — блок свободен, 0xFFFF — последний блок файла,
+;              иначе — номер следующего блока файла
+;    +2..+5  каталог: 64 записи по 32 байта
+;              имя (24 байта, с нулём в конце), размер (4), первый блок (2)
+;    +6..    блоки данных по 512 байт (блок 0 не используется)
+;
+;  Таблица блоков и каталог держатся в памяти и записываются на диск
+;  после каждого изменения.
+; =====================================================================
+
+b 32
+FS_SUPER   = FS_START
+FS_FATSEC  = FS_START+1
+FS_DIRSEC  = FS_START+2
+FS_DATA    = FS_START+6
+FS_DIRSECS = 4
+FS_BLOCKS  = 256
+FS_ENTRIES = 64
+FAT_END    = 0xFFFF
+DIR_SIZE   = 24                  ; смещения полей в записи каталога
+DIR_BLOCK  = 28
+NAME_MAX   = 23
+FILE_MAX   = 32768
+
+fs_ready b: 0                    ; 1 — файловая система найдена
+fs_magic b: "GASEMFS1"
+
+; fs_init: прочитать суперблок, таблицу блоков и каталог
+fs_init:
+    pushad
+    mov byte [fs_ready] - 0
+    mov eax - FS_SUPER
+    mov edi - SECTOR_BUF
+    call ata_read
+    jfc .done
+    mov esi - SECTOR_BUF
+    mov edi - fs_magic
+    mov ecx - 8
+    cld
+    repe cmpsb
+    jfne .done
+    mov eax - FS_FATSEC
+    mov edi - FS_FAT
+    call ata_read
+    jfc .done
+    for ebx - 0 - FS_DIRSECS
+        let eax - "ebx + FS_DIRSEC"
+        let edi - "ebx*512 + FS_DIR"
+        call ata_read
+        jfc .done
+    end
+    mov byte [fs_ready] - 1
+.done:
+    popad
+    ret
+
+; fs_flush: записать таблицу блоков и каталог на диск. CF=1 — ошибка.
+fs_flush:
+    pushad
+    mov eax - FS_FATSEC
+    mov esi - FS_FAT
+    call ata_write
+    jfc .done
+    for ebx - 0 - FS_DIRSECS
+        let eax - "ebx + FS_DIRSEC"
+        let esi - "ebx*512 + FS_DIR"
+        call ata_write
+        jfc .done
+    end
+.done:
+    popad
+    ret
+
+; fs_format: создать пустую файловую систему
+fs_format:
+    pushad
+    mov edi - SECTOR_BUF         ; суперблок
+    mov ecx - 512
+    xor eax - eax
+    cld
+    rep stosb
+    mov esi - fs_magic
+    mov edi - SECTOR_BUF
+    mov ecx - 8
+    rep movsb
+    mov dword [SECTOR_BUF+8] - FS_BLOCKS
+    mov dword [SECTOR_BUF+12] - FS_ENTRIES
+    mov eax - FS_SUPER
+    mov esi - SECTOR_BUF
+    call ata_write
+    mov edi - FS_FAT             ; пустые таблица и каталог
+    mov ecx - 512+FS_ENTRIES*32
+    xor eax - eax
+    rep stosb
+    mov word [FS_FAT] - FAT_END  ; блок 0 зарезервирован
+    call fs_flush
+    mov byte [fs_ready] - 1
+    popad
+    ret
+
+; fs_find: найти файл с именем esi. CF=0 — найден, edi = запись каталога.
+fs_find:
+    push ecx
+    mov edi - FS_DIR
+    for ecx - 0 - FS_ENTRIES
+        if byte [edi] != 0
+            call str_eq
+            if zero
+                pop ecx
+                clc
+                ret
+            end
+        end
+        add edi - 32
+    end
+    pop ecx
+    stc
+    ret
+
+; fs_free_entry: свободная запись каталога → edi. CF=1 — каталог полон.
+fs_free_entry:
+    push ecx
+    mov edi - FS_DIR
+    for ecx - 0 - FS_ENTRIES
+        if byte [edi] = 0
+            pop ecx
+            clc
+            ret
+        end
+        add edi - 32
+    end
+    pop ecx
+    stc
+    ret
+
+; fs_free_blocks: число свободных блоков → eax
+fs_free_blocks:
+    push ecx
+    xor eax - eax
+    for ecx - 1 - FS_BLOCKS
+        if word [FS_FAT+ecx*2] = 0
+            inc eax
+        end
+    end
+    pop ecx
+    ret
+
+; fs_alloc: занять свободный блок → eax. CF=1 — диск полон.
+fs_alloc:
+    for eax - 1 - FS_BLOCKS
+        if word [FS_FAT+eax*2] = 0
+            mov word [FS_FAT+eax*2] - FAT_END
+            clc
+            ret
+        end
+    end
+    stc
+    ret
+
+; fs_free_chain: освободить цепочку блоков, начиная с eax
+fs_free_chain:
+    push eax
+    push ebx
+    and eax - 0xFFFF
+    while eax != 0 and eax != FAT_END and eax < FS_BLOCKS
+        movzx ebx - word [FS_FAT+eax*2]
+        mov word [FS_FAT+eax*2] - 0
+        mov eax - ebx
+    end
+    pop ebx
+    pop eax
+    ret
+
+; fs_load: прочитать файл (edi — запись каталога) в FILE_BUF → ecx = размер.
+;          CF=1 — ошибка чтения.
+fs_load:
+    push eax
+    push edi
+    mov ecx - [edi+DIR_SIZE]
+    movzx eax - word [edi+DIR_BLOCK]
+    mov edi - FILE_BUF
+    while eax != 0 and eax != FAT_END and eax < FS_BLOCKS
+        push eax
+        add eax - FS_DATA
+        call ata_read
+        pop eax
+        jfc .done
+        add edi - 512
+        movzx eax - word [FS_FAT+eax*2]
+    end
+    clc
+.done:
+    pop edi
+    pop eax
+    ret
+
+; fs_save: сохранить ecx байт из FILE_BUF в файл с именем esi
+;          (создать или перезаписать). CF=1 — ошибка, eax = текст ошибки.
+fs_save:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    mov eax - err_too_big
+    cmp ecx - FILE_MAX
+    jfa .fail
+    call fs_find
+    if not carry                 ; файл уже есть — освобождаем старые блоки
+        movzx eax - word [edi+DIR_BLOCK]
+        call fs_free_chain
+    else
+        call fs_free_entry
+        mov eax - err_dir_full
+        jfc .fail
+        call fs_set_name
+    end
+    mov [edi+DIR_SIZE] - ecx
+    mov word [edi+DIR_BLOCK] - 0
+    let edx - "(ecx + 511) / 512"   ; сколько нужно блоков
+    call fs_free_blocks
+    if eax < edx
+        mov byte [edi] - 0       ; не поместился — файла больше нет
+        call fs_flush
+        mov eax - err_disk_full
+        jmp .fail
+    end
+    push edi                     ; дополнить последний блок нулями
+    let edi - "FILE_BUF + ecx"
+    let ecx - "(512 - ecx % 512) % 512"
+    xor eax - eax
+    cld
+    rep stosb
+    pop edi
+    mov esi - FILE_BUF
+    xor ebx - ebx                ; предыдущий блок (0 — его ещё нет)
+    while edx != 0
+        call fs_alloc
+        if ebx = 0
+            mov [edi+DIR_BLOCK] - ax
+        else
+            mov [FS_FAT+ebx*2] - ax
+        end
+        mov ebx - eax
+        add eax - FS_DATA
+        call ata_write
+        mov eax - err_io
+        jfc .fail
+        add esi - 512
+        dec edx
+    end
+    call fs_flush
+    mov eax - err_io
+    jfc .fail
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    clc
+    ret
+.fail:
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    stc
+    ret
+
+; fs_delete: удалить файл (edi — запись каталога)
+fs_delete:
+    push eax
+    movzx eax - word [edi+DIR_BLOCK]
+    call fs_free_chain
+    mov byte [edi] - 0
+    call fs_flush
+    pop eax
+    ret
+
+; fs_set_name: записать имя esi в запись каталога edi (24 байта, хвост — нули)
+fs_set_name:
+    pushad
+    push edi
+    mov ecx - 24
+    xor eax - eax
+    cld
+    rep stosb
+    pop edi
+    for ecx - 0 - NAME_MAX
+        mov al - [esi+ecx]
+        if al = 0
+            break
+        end
+        mov [edi+ecx] - al
+    end
+    popad
+    ret
+
+; str_eq: равны ли строки esi и edi (до нулевого байта)? ZF=1 — равны.
+str_eq:
+    push eax
+    push esi
+    push edi
+    repeat
+        mov al - [esi]
+        cmp al - [edi]
+        jfne .done               ; ZF=0 — различаются
+        inc esi
+        inc edi
+        chk al - al
+    until zero                   ; дошли до конца обеих строк: ZF=1
+.done:
+    pop edi
+    pop esi
+    pop eax
+    ret
+
+err_too_big   b: "file too large (max 32 KB)" - 0
+err_dir_full  b: "directory is full (64 files)" - 0
+err_disk_full b: "disk is full" - 0
+err_io        b: "disk I/O error" - 0

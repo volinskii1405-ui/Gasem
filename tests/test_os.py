@@ -24,7 +24,11 @@ class GasemOSBuildTest(unittest.TestCase):
         self.assertEqual(len(code) % 512, 0)
         self.assertEqual(code[510:512], b"\x55\xaa")          # загрузочная сигнатура
         self.assertEqual(res.symbols["kernel_start"], 0x7E00)  # ядро сразу за загрузчиком
-        self.assertEqual(res.symbols["KERNEL_SECTORS"], len(code) // 512 - 1)
+        kernel = res.symbols["kernel_end"] - res.symbols["kernel_start"]
+        self.assertEqual(res.symbols["KERNEL_SECTORS"], kernel // 512)
+        fs = res.symbols["FS_START"] * 512                     # GasemFS — за ядром
+        self.assertLessEqual(res.symbols["kernel_end"] - 0x7C00, fs)
+        self.assertEqual(code[fs:fs + 8], b"GASEMFS1")
 
 
 @unittest.skipUnless(QEMU, "QEMU не установлен")
@@ -70,6 +74,58 @@ class GasemOSQemuTest(unittest.TestCase):
         self.run_command("cpu", "Vendor:")
         self.run_command("echo Gasem works", "Gasem works")
         self.run_command("frobnicate", "Unknown command: frobnicate")
+
+    def test_files(self):
+        self.wait_for("gasem>")
+        self.run_command("clear", "gasem>")
+        self.run_command("ls", "2 file(s)")
+        self.run_command("cat hello.gsm", "jfnz print")
+        self.run_command("write note.txt Hello from GasemFS", "Saved 19 bytes to note.txt")
+        self.run_command("append note.txt Second line", "Saved 31 bytes to note.txt")
+        self.run_command("cp note.txt copy.txt", "Saved 31 bytes to copy.txt")
+        self.run_command("mv copy.txt old.txt", "Renamed.")
+        self.run_command("rm old.txt", "Deleted old.txt")
+        self.run_command("cat old.txt", "File not found: old.txt")
+
+
+@unittest.skipUnless(QEMU, "QEMU не установлен")
+class GasemFSPersistenceTest(unittest.TestCase):
+    """Файлы, записанные системой, остаются на диске после перезапуска."""
+
+    def test_reboot_keeps_files(self):
+        sys.path.insert(0, OS_DIR)
+        import qemu_demo
+        from gasemfs import GasemFS
+        with tempfile.TemporaryDirectory() as tmp:
+            image = os.path.join(tmp, "gasemos.img")
+            with open(image, "wb") as f:
+                f.write(build().code)
+            lines = [f"line {i} of a file longer than one 512-byte block" for i in range(12)]
+
+            vm = qemu_demo.Qemu(image, tmp)
+            try:
+                time.sleep(3)
+                for line in lines:
+                    vm.type(f"append big.txt {line}\n", delay=0.03)
+                vm.type("shutdown\n")
+                vm.proc.wait(timeout=20)       # ACPI выключение
+            finally:
+                if vm.proc.poll() is None:
+                    vm.quit()
+
+            fs = GasemFS(image)                 # проверяем диск независимым кодом
+            self.assertTrue(fs.check())
+            self.assertEqual(fs.read("big.txt").decode(), "".join(l + "\n" for l in lines))
+
+            vm = qemu_demo.Qemu(image, tmp)     # и снова загружаемся
+            try:
+                time.sleep(3)
+                vm.type("cat big.txt\n")
+                time.sleep(1)
+                screen = [r.decode("cp437") for r in vm.screen_text()]
+                self.assertTrue(any(lines[-1] in r for r in screen), "\n".join(screen))
+            finally:
+                vm.quit()
 
 
 if __name__ == "__main__":

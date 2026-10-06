@@ -9,21 +9,14 @@ ticks d: 0                       ; тиков таймера с момента �
 ; idt_init: заполнить IDT и загрузить её
 idt_init:
     pushad
-    xor ecx - ecx                ; все 256 векторов — «пустой» обработчик
-.fill:
-    mov eax - int_ignore
-    call set_gate
-    inc ecx
-    cmp ecx - 256
-    jfb .fill
-    xor ecx - ecx                ; исключения 0..31 — заглушки по 5 байт
-.exceptions:
-    lea eax - [ecx+ecx*4]
-    add eax - exc_stubs
-    call set_gate
-    inc ecx
-    cmp ecx - 32
-    jfb .exceptions
+    for ecx - 0 - 256            ; все векторы — «пустой» обработчик
+        mov eax - int_ignore
+        call set_gate
+    end
+    for ecx - 0 - 32             ; исключения 0..31 — заглушки по 5 байт
+        let eax - "ecx*5 + exc_stubs"
+        call set_gate
+    end
     mov ecx - 0x20               ; IRQ 0 — таймер
     mov eax - irq0_timer
     call set_gate

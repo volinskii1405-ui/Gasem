@@ -24,7 +24,7 @@ from gasem import compile_file  # noqa: E402
 KEYS = {" ": "spc", "\n": "ret", "-": "minus", "=": "equal", "+": "shift-equal",
         "*": "shift-8", "/": "slash", "%": "shift-5", "!": "shift-1", ",": "comma",
         ".": "dot", "'": "apostrophe", ":": "shift-semicolon", "?": "shift-slash",
-        "\b": "backspace"}
+        "\b": "backspace", "_": "shift-minus"}
 
 
 class Qemu:
@@ -110,8 +110,9 @@ class Qemu:
         self.proc.wait(timeout=10)
 
 
-def play_snake(vm, seconds):
-    """Простой автопилот: ведёт голову змейки к еде, читая видеопамять."""
+def play_snake(vm, seconds, target=10):
+    """Простой автопилот: ведёт голову змейки к еде, читая видеопамять.
+    Останавливается, набрав target очков."""
     dirs = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
     opposite = {"up": "down", "down": "up", "left": "right", "right": "left"}
     current = "right"
@@ -128,6 +129,9 @@ def play_snake(vm, seconds):
                 elif ch == 0xDB and attr == 0x0A:      # голова — светло-зелёная
                     head = (r, c)
         if head is None or food is None:
+            break
+        title = rows[1].decode("cp437")
+        if "Score:" in title and int(title.split("Score:")[1].split()[0]) >= target:
             break
 
         def free(cell):
@@ -160,52 +164,55 @@ def play_snake(vm, seconds):
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "screenshots")
     os.makedirs(out_dir, exist_ok=True)
+    shots = []
     with tempfile.TemporaryDirectory() as tmp:
         image = os.path.join(tmp, "gasemos.img")
         with open(image, "wb") as f:
             f.write(compile_file(os.path.join(HERE, "gasemos.gsm")).code)
 
-        vm = Qemu(image, tmp)
-        shots = []
-
-        def shot(name):
+        def shot(vm, name):
             shots.append(vm.screenshot(os.path.join(out_dir, name)))
             print("снимок:", shots[-1])
 
+        def run(vm, lines, pause=0.3):
+            for line in lines:
+                vm.type(line + "\n")
+                time.sleep(pause)
+            time.sleep(0.5)
+
+        vm = Qemu(image, tmp)
         try:
             time.sleep(4)
-            shot("1-boot.png")
+            shot(vm, "1-boot.png")
+            run(vm, ["help"])
+            shot(vm, "2-help.png")
+            run(vm, ["clear", "about", "cpu", "mem", "time", "uptime"])
+            shot(vm, "3-system-info.png")
+            run(vm, ["clear", "calc 6*7", "calc 1000-2026", "calc 100/0", "echo Hello from Gasem!",
+                     "color 14", "echo Yellow text", "color 11", "echo Cyan text", "color 7", "dir"])
+            shot(vm, "4-commands.png")
+            run(vm, ["clear", "ls", "write note.txt GasemFS keeps files on the disk.",
+                     "append note.txt They survive a reboot.", "cp note.txt copy.txt",
+                     "mv copy.txt backup.txt", "ls", "cat note.txt"])
+            shot(vm, "5-files.png")
+            vm.type("shutdown\n")                  # выключаем — файлы должны остаться
+            vm.proc.wait(timeout=20)
+        finally:
+            if vm.proc.poll() is None:
+                vm.quit()
 
-            vm.type("help\n")
-            time.sleep(0.5)
-            shot("2-help.png")
-
-            vm.type("clear\n")
-            for line in ["about\n", "cpu\n", "mem\n", "time\n", "uptime\n"]:
-                vm.type(line)
-                time.sleep(0.2)
-            time.sleep(0.5)
-            shot("3-system-info.png")
-
-            vm.type("clear\n")
-            for line in ["calc 6*7\n", "calc 1000-2026\n", "calc 100/0\n",
-                         "echo Hello from Gasem!\n", "color 14\n", "echo Yellow text\n",
-                         "color 11\n", "echo Cyan text\n", "color 7\n", "dir\n"]:
-                vm.type(line)
-                time.sleep(0.2)
-            time.sleep(0.5)
-            shot("4-commands.png")
-
-            vm.type("snake\n")
-            time.sleep(0.5)
+        vm = Qemu(image, tmp)                     # новая загрузка с того же диска
+        try:
+            time.sleep(4)
+            run(vm, ["ls", "cat note.txt"])
+            shot(vm, "6-after-reboot.png")
+            run(vm, ["snake"])
             play_snake(vm, 40)
-            shot("5-snake.png")
+            shot(vm, "7-snake.png")
             vm.type("q")
             time.sleep(0.5)
-
-            vm.type("crash\n")
-            time.sleep(0.8)
-            shot("6-exception.png")
+            run(vm, ["crash"])
+            shot(vm, "8-exception.png")
         finally:
             vm.quit()
     return shots

@@ -1,0 +1,69 @@
+; =====================================================================
+;  Начальное содержимое диска с GasemFS: суперблок, таблица блоков,
+;  каталог и два файла. Собирается компилятором Gasem вместе с системой.
+; =====================================================================
+
+; ---- суперблок (сектор FS_START)
+    b/ 8: "GASEMFS1"
+    d: FS_BLOCKS
+    d: FS_ENTRIES
+    b-512-16
+
+; ---- таблица блоков
+    w: FAT_END                   ; блок 0 зарезервирован
+    w: FAT_END                   ; блок 1 — readme.txt (один блок)
+    w: FAT_END                   ; блок 2 — hello.gsm
+    w-FS_BLOCKS-3                ; остальные свободны
+
+; ---- каталог: имя (24 байта) - размер - первый блок
+    b/ 24: "readme.txt"
+    d: readme_end-readme
+    w: 1 - 0
+    b/ 24: "hello.gsm"
+    d: hello_end-hello
+    w: 2 - 0
+    b-(FS_ENTRIES-2)*32
+
+; ---- блоки данных
+    b-512                        ; блок 0
+
+readme:                          ; блок 1
+    b: "Welcome to GasemOS!" - 10
+    b: 10
+    b: "This disk has a file system - GasemFS. Files survive a reboot." - 10
+    b: "Try these commands:" - 10
+    b: 10
+    b: "  ls                          list files" - 10
+    b: "  cat hello.gsm               show a file" - 10
+    b: "  write note.txt Hello!       create a file" - 10
+    b: "  append note.txt More text   add a line" - 10
+    b: "  cp note.txt copy.txt        copy a file" - 10
+    b: "  mv copy.txt old.txt         rename a file" - 10
+    b: "  rm old.txt                  delete a file" - 10
+    b: 10
+    b: "The whole system, this file system included, is written in Gasem." - 10
+readme_end:
+    b-512-(readme_end-readme)    ; файл должен поместиться в один блок
+
+hello:                           ; блок 2: загрузчик из документации Gasem
+    b: "; Hello world bootloader from the Gasem documentation" - 10
+    b: "og 0x7C00" - 10
+    b: "b 16" - 10
+    b: "xor ax - ax" - 10
+    b: "mov ds - ax" - 10
+    b: "mov si - msg" - 10
+    b: "print:" - 10
+    b: "    mov ah - 0x0E" - 10
+    b: "    nxtb" - 10
+    b: "    int 0x10" - 10
+    b: "    chk al - al" - 10
+    b: "    jfnz print" - 10
+    b: "    jmp $" - 10
+    b: 10
+    b: "msg b: \"Hello\" - 0" - 10
+    b: "&& 510-($-$$) b: 0" - 10
+    b: "w: 0xAA55" - 10
+hello_end:
+    b-512-(hello_end-hello)
+
+    b-(FS_BLOCKS-3)*512          ; свободные блоки

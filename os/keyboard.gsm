@@ -45,15 +45,13 @@ irq1_keyboard:
     jfe .case
     mov al - [keymap_shift+ebx]
 .case:
-    cmp byte [kb_caps] - 0       ; Caps Lock меняет регистр букв
-    jfe .put
-    mov ah - al
-    or ah - 0x20
-    cmp ah - 'a'
-    jfb .put
-    cmp ah - 'z'
-    jfa .put
-    xor al - 0x20
+    if byte [kb_caps] != 0       ; Caps Lock меняет регистр букв
+        mov ah - al
+        or ah - 0x20
+        if ah >= 'a' and ah <= 'z'
+            xor al - 0x20
+        end
+    end
 .put:
     call kb_push
 .eoi:

@@ -22,31 +22,23 @@ prompt b: "gasem> " - 0
 readline:
     pushad
     xor ecx - ecx                ; длина строки
-.key:
-    call getchar
-    cmp al - 10
-    jfe .enter
-    cmp al - 8
-    jfe .backspace
-    cmp al - ' '
-    jfb .key                     ; прочие управляющие (Tab, Esc) — пропуск
-    cmp al - '~'
-    jfa .key                     ; стрелки и др. — пропуск
-    cmp ecx - LINE_MAX
-    jfae .key
-    mov [line_buf+ecx] - al
-    inc ecx
-    call putc
-    jmp .key
-.backspace:
-    chk ecx - ecx
-    jfz .key
-    dec ecx
-    call putc
-    jmp .key
-.enter:
+    while 1
+        call getchar
+        if al = 10
+            break
+        elif al = 8
+            if ecx != 0
+                dec ecx
+                call putc
+            end
+        elif al >= ' ' and al <= '~' and ecx < LINE_MAX
+            mov [line_buf+ecx] - al
+            inc ecx
+            call putc
+        end                      ; остальное (Tab, Esc, стрелки) — пропуск
+    end
     mov byte [line_buf+ecx] - 0
-    call putc
+    call putc                    ; перевод строки
     popad
     ret
 
@@ -177,6 +169,14 @@ commands:
     d: s_crash - cmd_crash
     d: s_reboot - cmd_reboot
     d: s_shutdown - cmd_shutdown
+    d: s_ls - cmd_ls
+    d: s_cat - cmd_cat
+    d: s_write - cmd_write
+    d: s_append - cmd_append
+    d: s_cp - cmd_cp
+    d: s_mv - cmd_mv
+    d: s_rm - cmd_rm
+    d: s_format - cmd_format
     d: 0
 
 s_help     b: "help" - 0
@@ -193,6 +193,14 @@ s_snake    b: "snake" - 0
 s_crash    b: "crash" - 0
 s_reboot   b: "reboot" - 0
 s_shutdown b: "shutdown" - 0
+s_ls       b: "ls" - 0
+s_cat      b: "cat" - 0
+s_write    b: "write" - 0
+s_append   b: "append" - 0
+s_cp       b: "cp" - 0
+s_mv       b: "mv" - 0
+s_rm       b: "rm" - 0
+s_format   b: "format" - 0
 
 ; ---- help
 cmd_help:
@@ -200,21 +208,21 @@ cmd_help:
     jmp puts
 
 help_text:
-    b: "Commands:" - 10
-    b: "  help              this list" - 10
-    b: "  clear             clear the screen" - 10
-    b: "  about             about GasemOS" - 10
-    b: "  echo <text>       print a line of text" - 10
-    b: "  calc <a><op><b>   integer calculator, op: + - * / %" - 10
-    b: "  color <1-15>      change the text color" - 10
-    b: "  time              date and time from the RTC" - 10
-    b: "  uptime            time since boot" - 10
-    b: "  mem               installed memory" - 10
-    b: "  cpu               processor information (CPUID)" - 10
-    b: "  snake             play Snake (arrows or WASD, Q - quit)" - 10
-    b: "  crash             divide by zero to test the exception handler" - 10
-    b: "  reboot            restart the computer" - 10
-    b: "  shutdown          power off (ACPI, works in QEMU)" - 10 - 0
+    b: "System:                                Files:" - 10
+    b: "  help          this list              ls                    list files" - 10
+    b: "  clear         clear the screen       cat <file>            print a file" - 10
+    b: "  about         about GasemOS          write <file> <text>   create a file" - 10
+    b: "  echo <text>   print a line           append <file> <text>  add a line" - 10
+    b: "  calc 6*7      calculator: + - * / %  cp <from> <to>        copy a file" - 10
+    b: "  color <1-15>  text color             mv <old> <new>        rename a file" - 10
+    b: "  time          date and time (RTC)    rm <file>             delete a file" - 10
+    b: "  uptime        time since boot        format                erase the disk" - 10
+    b: "  mem           memory size" - 10
+    b: "  cpu           processor (CPUID)" - 10
+    b: "  snake         play Snake" - 10
+    b: "  crash         test the panic screen" - 10
+    b: "  reboot        restart" - 10
+    b: "  shutdown      power off (ACPI)" - 10 - 0
 
 ; ---- clear
 cmd_clear:

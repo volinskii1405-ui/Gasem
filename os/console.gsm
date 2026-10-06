@@ -24,42 +24,46 @@ clear_screen:
     popad
     ret
 
-; putc: вывести символ al (понимает 10 — перевод строки и 8 — забой)
+; putc: вывести символ al (10 — перевод строки, 8 — забой, 9 — табуляция)
 putc:
     pushad
-    cmp al - 10
-    jfe .newline
-    cmp al - 8
-    jfe .backspace
-    mov ebx - [cur_row]
-    imul ebx - ebx - 80
-    add ebx - [cur_col]
-    mov ah - [cur_attr]
-    mov [VGA+ebx*2] - ax
-    inc dword [cur_col]
-    cmp dword [cur_col] - 80
-    jfl .done
-.newline:
-    mov dword [cur_col] - 0
-    inc dword [cur_row]
-    cmp dword [cur_row] - 25
-    jfl .done
-    call scroll
-    mov dword [cur_row] - 24
-    jmp .done
-.backspace:
-    cmp dword [cur_col] - 0
-    jfe .done
-    dec dword [cur_col]
-    mov ebx - [cur_row]
-    imul ebx - ebx - 80
-    add ebx - [cur_col]
-    mov ah - [cur_attr]
-    mov al - ' '
-    mov [VGA+ebx*2] - ax
-.done:
+    if al = 10
+        call line_feed
+    elif al = 8
+        if dword [cur_col] != 0
+            dec dword [cur_col]
+            let ebx - "[cur_row]*80 + [cur_col]"
+            mov ah - [cur_attr]
+            mov al - ' '
+            mov [VGA+ebx*2] - ax
+        end
+    elif al = 9                  ; пробелы до столбца, кратного 4
+        mov al - ' '
+        repeat
+            call putc
+            chk byte [cur_col] - 3
+        until zero
+    else
+        let ebx - "[cur_row]*80 + [cur_col]"
+        mov ah - [cur_attr]
+        mov [VGA+ebx*2] - ax
+        inc dword [cur_col]
+        if dword [cur_col] = 80
+            call line_feed
+        end
+    end
     call update_cursor
     popad
+    ret
+
+; line_feed: перейти на новую строку (с прокруткой экрана)
+line_feed:
+    mov dword [cur_col] - 0
+    inc dword [cur_row]
+    if dword [cur_row] = 25
+        call scroll
+        mov dword [cur_row] - 24
+    end
     ret
 
 ; scroll: сдвинуть строки 2..24 на одну вверх, очистить строку 24
@@ -80,9 +84,7 @@ scroll:
 ; update_cursor: поставить мигающий курсор VGA в позицию cur_row/cur_col
 update_cursor:
     pushad
-    mov ebx - [cur_row]
-    imul ebx - ebx - 80
-    add ebx - [cur_col]
+    let ebx - "[cur_row]*80 + [cur_col]"
     mov dx - 0x3D4
     mov al - 0x0F
     out dx - al

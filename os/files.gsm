@@ -1,0 +1,383 @@
+; =====================================================================
+;  Файловые команды оболочки: ls, cat, write, append, cp, mv, rm, format.
+; =====================================================================
+
+b 32
+name_buf  b-24
+name_buf2 b-24
+
+; get_name: слово из строки esi → в буфер edi. CF=1 — имени нет или оно длиннее 23
+get_name:
+    push eax
+    push ecx
+    xor ecx - ecx
+    while byte [esi] != 0 and byte [esi] != ' ' and ecx < NAME_MAX
+        mov al - [esi]
+        mov [edi+ecx] - al
+        inc esi
+        inc ecx
+    end
+    mov byte [edi+ecx] - 0
+    if byte [esi] != 0 and byte [esi] != ' '
+        xor ecx - ecx            ; слишком длинное имя — считаем, что его нет
+    end
+    call skip_spaces
+    cmp ecx - 1                  ; CF=1, если ecx = 0
+    pop ecx
+    pop eax
+    ret
+
+; need_fs: CF=1 (и сообщение), если на диске нет файловой системы
+need_fs:
+    if byte [fs_ready] = 0
+        push esi
+        push ebx
+        mov bl - 0x0C
+        mov esi - msg_no_fs
+        call puts_attr
+        pop ebx
+        pop esi
+        stc
+        ret
+    end
+    clc
+    ret
+
+; fs_error: напечатать «Error: <eax>» красным
+fs_error:
+    push esi
+    push ebx
+    mov bl - 0x0C
+    mov esi - msg_error
+    call puts_attr
+    mov esi - eax
+    call puts_attr
+    call newline
+    pop ebx
+    pop esi
+    ret
+
+; not_found: «File not found: <name_buf>»
+not_found:
+    push esi
+    push ebx
+    mov bl - 0x0C
+    mov esi - msg_not_found
+    call puts_attr
+    mov esi - name_buf
+    call puts_attr
+    call newline
+    pop ebx
+    pop esi
+    ret
+
+; usage: напечатать строку esi и выйти из команды
+usage:
+    jmp puts
+
+; append_text: дописать строку esi и перевод строки в FILE_BUF+ecx, ecx += длина
+append_text:
+    push eax
+    push esi
+    while byte [esi] != 0
+        mov al - [esi]
+        mov [FILE_BUF+ecx] - al
+        inc esi
+        inc ecx
+    end
+    mov byte [FILE_BUF+ecx] - 10
+    inc ecx
+    pop esi
+    pop eax
+    ret
+
+; save_report: сохранить FILE_BUF (ecx байт) в name_buf и сообщить результат
+save_report:
+    push esi
+    mov esi - name_buf
+    call fs_save
+    if carry
+        call fs_error
+    else
+        mov esi - msg_saved
+        call puts
+        mov eax - ecx
+        call print_dec
+        mov esi - msg_bytes_to
+        call puts
+        mov esi - name_buf
+        call puts
+        call newline
+    end
+    pop esi
+    ret
+
+; ---- ls
+cmd_ls:
+    call need_fs
+    if carry
+        ret
+    end
+    pushad
+    xor ebx - ebx                ; файлов
+    xor edx - edx                ; байт
+    mov esi - FS_DIR
+    for edi - 0 - FS_ENTRIES
+        if byte [esi] != 0
+            push esi
+            mov esi - ls_indent
+            call puts
+            pop esi
+            mov bl - 0x0F            ; имя — ярко-белым
+            call puts_attr
+            mov bl - 0
+            mov eax - 26
+            call tab_to
+            mov eax - [esi+DIR_SIZE]
+            mov ecx - 7
+            call print_dec_w
+            push esi
+            mov esi - msg_bytes
+            call puts
+            pop esi
+            inc bh                   ; bh — счётчик файлов (bl занят цветом)
+            add edx - [esi+DIR_SIZE]
+        end
+        add esi - 32
+    end
+    movzx eax - bh
+    call print_dec
+    mov esi - msg_files
+    call puts
+    mov eax - edx
+    call print_dec
+    mov esi - msg_used
+    call puts
+    call fs_free_blocks
+    let eax - "eax / 2"          ; блоки по 512 байт → КБ
+    call print_dec
+    mov esi - msg_free
+    call puts
+    popad
+    ret
+
+; ---- cat <файл>
+cmd_cat:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf
+    call get_name
+    mov esi - use_cat
+    jfc usage
+    mov esi - name_buf
+    call fs_find
+    jfc not_found
+    call fs_load
+    mov eax - err_io
+    jfc fs_error
+    mov edx - ecx
+    for ecx - 0 - edx
+        mov al - [FILE_BUF+ecx]
+        call putc
+    end
+    if edx != 0 and byte [FILE_BUF+edx-1] != 10
+        call newline             ; файл без перевода строки в конце
+    end
+    ret
+
+; ---- write <файл> <текст>
+cmd_write:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf
+    call get_name
+    push esi
+    mov esi - use_write
+    jfc .usage
+    pop esi
+    xor ecx - ecx
+    if byte [esi] != 0           ; без текста — пустой файл
+        call append_text
+    end
+    jmp save_report
+.usage:
+    pop eax
+    jmp usage
+
+; ---- append <файл> <текст>
+cmd_append:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf
+    call get_name
+    push esi
+    mov esi - use_append
+    jfc .usage
+    mov esi - name_buf
+    xor ecx - ecx
+    call fs_find
+    if not carry                 ; файл есть — сначала читаем его
+        call fs_load
+        if carry
+            pop esi
+            mov eax - err_io
+            jmp fs_error
+        end
+    end
+    pop esi
+    call append_text
+    jmp save_report
+.usage:
+    pop eax
+    jmp usage
+
+; ---- cp <откуда> <куда>
+cmd_cp:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf2          ; esi — аргументы, не портим его до второго имени
+    call get_name
+    jfc .usage
+    mov edi - name_buf
+    call get_name
+    jfc .usage
+    mov esi - name_buf2          ; источник
+    call fs_find
+    if carry
+        mov esi - name_buf2      ; сообщаем имя источника
+        mov edi - name_buf
+        call copy_name
+        jmp not_found
+    end
+    call fs_load
+    mov eax - err_io
+    jfc fs_error
+    jmp save_report              ; сохраняем под именем name_buf
+.usage:
+    mov esi - use_cp
+    jmp usage
+
+; copy_name: скопировать имя esi в буфер edi
+copy_name:
+    pushad
+    mov ecx - 24
+    cld
+    rep movsb
+    popad
+    ret
+
+; ---- mv <старое> <новое>
+cmd_mv:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf
+    call get_name
+    jfc .usage
+    mov edi - name_buf2
+    call get_name
+    jfc .usage
+    mov esi - name_buf2
+    call fs_find
+    if not carry
+        mov eax - err_exists
+        jmp fs_error
+    end
+    mov esi - name_buf
+    call fs_find
+    jfc not_found
+    mov esi - name_buf2
+    call fs_set_name
+    call fs_flush
+    mov esi - msg_renamed
+    jmp puts
+.usage:
+    mov esi - use_mv
+    jmp usage
+
+; ---- rm <файл>
+cmd_rm:
+    call need_fs
+    if carry
+        ret
+    end
+    mov edi - name_buf
+    call get_name
+    mov esi - use_rm
+    jfc usage
+    mov esi - name_buf
+    call fs_find
+    jfc not_found
+    call fs_delete
+    mov esi - msg_deleted
+    call puts
+    mov esi - name_buf
+    call puts
+    jmp newline
+
+; ---- format
+cmd_format:
+    call fs_format
+    mov esi - msg_formatted
+    jmp puts
+
+; tab_to: дополнить строку пробелами до столбца eax
+tab_to:
+    push eax
+    while dword [cur_col] < eax
+        push eax
+        mov al - ' '
+        call putc
+        pop eax
+    end
+    pop eax
+    ret
+
+; print_dec_w: число eax, выровненное вправо в поле шириной ecx
+print_dec_w:
+    pushad
+    mov esi - eax
+    mov edi - 1                  ; сколько цифр
+    while eax >= 10
+        let eax - "eax / 10"
+        inc edi
+    end
+    mov al - ' '
+    while ecx > edi
+        call putc
+        dec ecx
+    end
+    mov eax - esi
+    call print_dec
+    popad
+    ret
+
+ls_indent     b: "  " - 0
+msg_bytes     b: " bytes" - 10 - 0
+msg_files     b: " file(s), " - 0
+msg_used      b: " bytes used, " - 0
+msg_free      b: " KB free" - 10 - 0
+msg_saved     b: "Saved " - 0
+msg_bytes_to  b: " bytes to " - 0
+msg_deleted   b: "Deleted " - 0
+msg_renamed   b: "Renamed." - 10 - 0
+msg_formatted b: "Disk formatted: empty GasemFS." - 10 - 0
+msg_error     b: "Error: " - 0
+msg_not_found b: "File not found: " - 0
+msg_no_fs     b: "No file system on this disk. Type 'format' to create one." - 10 - 0
+err_exists    b: "a file with this name already exists" - 0
+use_cat       b: "Usage: cat <file>" - 10 - 0
+use_write     b: "Usage: write <file> <text>" - 10 - 0
+use_append    b: "Usage: append <file> <text>" - 10 - 0
+use_cp        b: "Usage: cp <from> <to>" - 10 - 0
+use_mv        b: "Usage: mv <old> <new>" - 10 - 0
+use_rm        b: "Usage: rm <file>" - 10 - 0

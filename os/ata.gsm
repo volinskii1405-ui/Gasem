@@ -1,0 +1,113 @@
+; =====================================================================
+;  Драйвер диска ATA (PIO, LBA28, первый канал, ведущее устройство).
+;  В защищённом режиме BIOS недоступен, поэтому с диском говорим
+;  напрямую через порты 0x1F0..0x1F7.
+; =====================================================================
+
+b 32
+ATA_DATA    = 0x1F0
+ATA_COUNT   = 0x1F2
+ATA_LBA0    = 0x1F3
+ATA_DRIVE   = 0x1F6
+ATA_STATUS  = 0x1F7              ; чтение — состояние, запись — команда
+ATA_READ    = 0x20
+ATA_WRITE   = 0x30
+ATA_FLUSH   = 0xE7
+ST_BUSY     = 0x80
+ST_DRQ      = 0x08               ; диск готов передать данные
+ST_ERROR    = 0x21               ; ошибка или отказ устройства
+
+; ata_read: прочитать сектор eax (LBA) в буфер edi. CF=1 — ошибка.
+ata_read:
+    pushad
+    mov bl - ATA_READ
+    call ata_command
+    jfc .fail
+    mov dx - ATA_DATA
+    mov ecx - 256                ; 256 слов = 512 байт
+    cld
+    rep insw
+    popad
+    clc
+    ret
+.fail:
+    popad
+    stc
+    ret
+
+; ata_write: записать 512 байт из esi в сектор eax. CF=1 — ошибка.
+ata_write:
+    pushad
+    mov bl - ATA_WRITE
+    call ata_command
+    jfc .fail
+    mov dx - ATA_DATA
+    mov ecx - 256
+    cld
+    rep outsw
+    call ata_idle                ; дождаться окончания записи
+    mov dx - ATA_STATUS
+    mov al - ATA_FLUSH           ; сбросить кэш диска на «пластины»
+    out dx - al
+    call ata_idle
+    popad
+    clc
+    ret
+.fail:
+    popad
+    stc
+    ret
+
+; ata_command: выбрать сектор eax и подать команду bl; дождаться готовности данных
+ata_command:
+    call ata_idle
+    mov ecx - eax
+    shr eax - 24
+    and al - 0x0F
+    or al - 0xE0                 ; режим LBA, ведущее устройство
+    mov dx - ATA_DRIVE
+    out dx - al
+    mov dx - ATA_COUNT
+    mov al - 1                   ; один сектор
+    out dx - al
+    mov eax - ecx
+    for dx - ATA_LBA0 - ATA_LBA0+3     ; три байта номера сектора
+        out dx - al
+        shr eax - 8
+    end
+    mov dx - ATA_STATUS
+    mov al - bl
+    out dx - al
+    ; ждём: диск не занят и готов передавать данные (или сообщил об ошибке)
+    mov ecx - 1000000
+    while ecx != 0
+        in al - dx
+        chk al - ST_BUSY
+        if zero
+            chk al - ST_ERROR
+            if not zero
+                break
+            end
+            chk al - ST_DRQ
+            if not zero
+                clc
+                ret
+            end
+        end
+        dec ecx
+    end
+    stc                          ; ошибка или диск не ответил
+    ret
+
+; ata_idle: дождаться, пока диск не занят
+ata_idle:
+    push eax
+    push edx
+    mov dx - ATA_STATUS
+    repeat
+        in al - dx
+        chk al - ST_BUSY
+    until zero
+    pop edx
+    pop eax
+    ret
