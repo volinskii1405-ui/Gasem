@@ -5,7 +5,8 @@ import os
 from . import nodes as N
 from . import x86
 from .errors import GasemError, SourceLoc
-from .lexer import tokenize, NUM, STR, ID, OP, SEP
+from .highlevel import CONTROL_WORDS, HighLevel
+from .lexer import Token, tokenize, NUM, STR, ID, OP, SEP
 
 DATA_UNITS = {"b": 1, "w": 2, "d": 4, "q": 8}
 SIZE_WORDS = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "b": 8, "w": 16, "d": 32, "q": 64}
@@ -65,6 +66,11 @@ class TokenStream:
             self.error(f"неожиданное '{t.text}' — ожидался конец {what}", t)
 
 
+def minus_seps(toks):
+    """Там, где нет операндов (константы, условия), ' - ' означает минус."""
+    return [Token(OP, "-", t.col, t.space, "-") if t.kind == SEP else t for t in toks]
+
+
 def split_seps(toks):
     groups = [[]]
     for t in toks:
@@ -86,6 +92,9 @@ class Parser:
         self.last_global = None
         self.pending_labels = []  # метки, за которыми ещё не было оператора
         self.include_stack = []
+        self.bits = 16            # текущий режим (b 16 / b 32) — нужен для let
+        self.current_loc = None
+        self.hl = HighLevel(self)  # if/while/for/let
 
     # ------------------------------------------------ файлы
 
@@ -111,9 +120,11 @@ class Parser:
     def parse_text(self, text, filename="<источник>", base_dir=None):
         if base_dir is None:
             base_dir = os.getcwd()
+        depth = len(self.hl.blocks)
         for lineno, line in enumerate(text.splitlines(), 1):
             loc = SourceLoc(filename, lineno, line)
             self.lines.append(loc)
+            self.current_loc = loc
             try:
                 toks = tokenize(line, loc)
                 if toks:
@@ -122,6 +133,7 @@ class Parser:
                 if e.loc is None:
                     e.loc = loc
                 self.errors.append(e)
+        self.hl.close_file(depth, self.errors)
 
     # ------------------------------------------------ имена
 
@@ -176,6 +188,7 @@ class Parser:
             self.check_name(t0)
             name = self.full_name(t0)
             ts.pos += 2
+            ts.toks = minus_seps(ts.toks)      # у константы нет операндов: ' - ' — это минус
             expr = self.parse_expr(ts)
             ts.expect_end()
             self.emit(N.ConstStmt(name, expr, loc, t0.col))
@@ -227,6 +240,13 @@ class Parser:
             ts.error(f"ожидалась команда, а встретилось '{t.text}'")
         word = t.value.lower()
 
+        if word in CONTROL_WORDS:
+            if not emit:
+                ts.error(f"{word} нельзя повторять через &&")
+            ts.next()
+            self.hl.statement(word, t, ts.rest(), loc)
+            return None
+
         if word == "og":
             ts.next()
             expr = self.parse_expr(ts)
@@ -239,6 +259,8 @@ class Parser:
                 ts.error("после b ожидается режим (b 16 или b 32), либо данные (b: ...)")
             expr = self.parse_expr(ts)
             ts.expect_end()
+            if N.fold_const(expr) in (16, 32):
+                self.bits = N.fold_const(expr)
             return self._finish(N.BitsStmt(expr, loc), emit)
 
         if word == "align":
@@ -587,14 +609,15 @@ class Parser:
 
     # ------------------------------------------------ выражения
 
-    def parse_expr_tokens(self, toks, loc):
+    def parse_expr_tokens(self, toks, loc, mode=None):
         ts = TokenStream(toks, loc)
-        e = self.parse_expr(ts)
+        e = self.parse_expr(ts, mode)
         ts.expect_end("выражения")
         return e
 
     def parse_expr(self, ts, mode=None):
-        """mode: None — обычное выражение, 'mem' — адрес, 'do' — выражение do."""
+        """mode: None — обычное выражение, 'mem' — адрес, 'do' — выражение do,
+        'let' — выражение let (можно читать память: [x], byte [esi])."""
         return self._binary(ts, 0, mode)
 
     def _binary(self, ts, level, mode):
@@ -651,6 +674,14 @@ class Parser:
                 ts.error("в do внутри [ ] пишется только имя переменной: [msg]", c)
             ts.next()
             return N.Var(self.full_name(nt), t.col)
+        if mode == "let" and (t.is_op("[") or (t.kind == ID and t.value.lower() in SIZE_WORDS
+                                                and ts.peek() is not None and ts.peek().is_op("["))):
+            size = None
+            if t.kind == ID:
+                size = SIZE_WORDS[t.value.lower()]
+            else:
+                ts.pos -= 1
+            return N.MemNode(self.parse_mem(ts, size), t.col)
         if t.kind == ID:
             low = t.value.lower()
             if low in x86.REGISTERS:

@@ -349,6 +349,8 @@ class Assembler:
             rows.append("")
             rows.append("Символы:")
             for name, value in sorted(self.cur.items(), key=lambda kv: (kv[1], kv[0])):
+                if name.startswith("@"):
+                    continue                       # служебные метки if/while/for
                 rows.append(f"  {value & 0xFFFFFFFF:08X}  {name}")
         return "\n".join(rows) + "\n"
 

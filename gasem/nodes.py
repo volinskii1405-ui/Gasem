@@ -57,6 +57,14 @@ class Var(Expr):
         self.col = col
 
 
+class MemNode(Expr):
+    """Чтение памяти [..] внутри выражения let (во время выполнения)."""
+
+    def __init__(self, mem, col=None):
+        self.mem = mem      # MemOperand
+        self.col = col
+
+
 class Unary(Expr):
     def __init__(self, op, x, col=None):
         self.op = op
@@ -80,6 +88,17 @@ def has_reg(node):
     if isinstance(node, Binary):
         return has_reg(node.a) or has_reg(node.b)
     return False
+
+
+def is_const(node):
+    """Можно ли вычислить выражение при компиляции (нет регистров и памяти)."""
+    if isinstance(node, (RegNode, MemNode, Var)):
+        return False
+    if isinstance(node, Unary):
+        return is_const(node.x)
+    if isinstance(node, Binary):
+        return is_const(node.a) and is_const(node.b)
+    return True
 
 
 def first_reg(node):
