@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gasem"
+version = "0.1.0"
+description = "Gasem — компилируемый язык для загрузчиков и системного ПО (синтаксис в стиле ассемблера x86)"
+readme = "README.md"
+requires-python = ">=3.8"
+
+[project.scripts]
+gasem = "gasem.cli:main"
+
+[tool.setuptools]
+packages = ["gasem"]

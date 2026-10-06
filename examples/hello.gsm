@@ -1,0 +1,17 @@
+; Пример загрузчика из документации Gasem: печатает "Hello" через BIOS.
+og 0x7C00
+b 16
+xor ax - ax
+mov ds - ax
+mov si - msg
+print:
+    mov ah - 0x0E
+    nxtb
+    int 0x10
+    chk al - al
+    jfnz print
+    jmp $
+
+msg b: "Hello" - 0
+&& 510-($-$$) b: 0
+w: 0xAA55
