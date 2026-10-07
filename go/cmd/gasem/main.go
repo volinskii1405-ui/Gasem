@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/volinskii1405-ui/Gasem/go/gasem"
+	"github.com/volinskii1405-ui/Gasem/go/lsp"
 )
 
 func main() {
@@ -287,6 +288,12 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return c.debug(argv[1:])
 	case "fmt":
 		return c.fmt(argv[1:])
+	case "lsp": // языковой сервер для редактора (VS Code запускает его сам)
+		if err := lsp.Serve(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(stderr, "gasem lsp: %s\n", err)
+			return 1
+		}
+		return 0
 	}
 	return c.build(argv)
 }

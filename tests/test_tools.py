@@ -130,6 +130,17 @@ class VSCodeTest(unittest.TestCase):
         body = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", body)
         self.assertEqual(run_boot(compile_source(body).code).output, b"Hello from Gasem!")
 
+    @unittest.skipUnless(shutil.which("node") and impl.go_compiler() is not None, "нужны node и go")
+    def test_language_server_client(self):
+        """extension.js и «gasem lsp» через ту же библиотеку JSON-RPC, что у VS Code."""
+        import subprocess
+        if not os.path.isdir(os.path.join(self.DIR, "node_modules")):
+            self.skipTest("нужен npm install в editors/vscode")
+        r = subprocess.run(["node", "test-extension.js", impl.go_compiler().gasem], cwd=self.DIR,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("gasem lsp через vscode-jsonrpc", r.stdout)
+
 
 class CliTest(unittest.TestCase):
     def test_build_map_and_warnings(self):

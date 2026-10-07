@@ -1,7 +1,7 @@
 {
   "name": "gasem",
   "displayName": "Gasem",
-  "description": "Подсветка синтаксиса и сниппеты для языка Gasem",
+  "description": "Подсветка, проверка ошибок при наборе, переход к объявлению, подсказки и сниппеты для языка Gasem",
   "version": "0.1.0",
   "publisher": "gasem",
   "license": "UNLICENSED",
@@ -10,11 +10,13 @@
     "url": "https://github.com/volinskii1405-ui/Gasem"
   },
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages",
-    "Snippets"
+    "Snippets",
+    "Linters",
+    "Formatters"
   ],
   "contributes": {
     "languages": [
@@ -42,6 +44,85 @@
         "language": "gasem",
         "path": "./snippets/gasem.json"
       }
+    ],
+    "configuration": {
+      "title": "Gasem",
+      "properties": {
+        "gasem.path": {
+          "type": "string",
+          "default": "gasem",
+          "description": "Путь к программе gasem (Go-версия). Нужна для проверки ошибок, подсказок и команд «Собрать» и «Запустить»."
+        },
+        "gasem.languageServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Проверять программу при наборе и давать подсказки (gasem lsp)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "gasem.build",
+        "title": "Gasem: Собрать",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "gasem.run",
+        "title": "Gasem: Собрать и запустить в QEMU",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gasem.restart",
+        "title": "Gasem: Перезапустить языковой сервер"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "gasem.build",
+          "when": "editorLangId == gasem",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gasem.run",
+          "when": "editorLangId == gasem",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gasem.build",
+          "when": "editorLangId == gasem"
+        },
+        {
+          "command": "gasem.run",
+          "when": "editorLangId == gasem"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "gasem",
+        "required": [
+          "mode",
+          "file"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          }
+        }
+      }
     ]
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:gasem"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

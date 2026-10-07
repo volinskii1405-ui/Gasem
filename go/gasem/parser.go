@@ -450,7 +450,8 @@ func (p *Parser) parseLine(toks []*Token, loc *SourceLoc, baseDir string) {
 		expr := p.parseExpr(ts, "")
 		ts.expectEnd("строки")
 		p.emit(&ConstStmt{Name: name, Expr: expr, Loc: loc, Col: t0.Col})
-		p.addDef(&Def{Name: name, Kind: "const", Loc: loc, Col: t0.Col, Detail: strings.TrimSpace(tokensText(loc, ts.toks[2:]))})
+		p.addDef(&Def{Name: name, Kind: "const", Loc: loc, Col: t0.Col,
+			Detail: name + " = " + strings.TrimSpace(tokensText(loc, ts.toks[2:]))})
 		return
 	}
 	p.parseStatement(ts, loc, baseDir, true)
