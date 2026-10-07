@@ -165,23 +165,20 @@ fs_alloc:
 
 ; fs_free_chain: освободить цепочку блоков, начиная с eax
 fs_free_chain:
-    push eax
-    push ebx
+    push eax - ebx
     and eax - 0xFFFF
     while eax != 0 and eax != FAT_END and eax < FS_BLOCKS
         movzx ebx - word [FS_FAT+eax*2]
         mov word [FS_FAT+eax*2] - 0
         mov eax - ebx
     end
-    pop ebx
-    pop eax
+    pop eax - ebx
     ret
 
 ; fs_load: прочитать файл (edi — запись каталога) в FILE_BUF → ecx = размер.
 ;          CF=1 — ошибка чтения.
 fs_load:
-    push eax
-    push edi
+    push eax - edi
     mov ecx - [edi+DIR_SIZE]
     movzx eax - word [edi+DIR_BLOCK]
     mov edi - FILE_BUF
@@ -196,23 +193,18 @@ fs_load:
     end
     clc
 .done:
-    pop edi
-    pop eax
+    pop eax - edi
     ret
 
 ; fs_save: сохранить ecx байт из FILE_BUF в файл с именем esi
 ;          (создать или перезаписать). CF=1 — ошибка, eax = текст ошибки.
 fs_save:
-    push ebx
-    push ecx
-    push edx
-    push esi
-    push edi
+    push ebx - ecx - edx - esi - edi
     mov eax - err_too_big
     cmp ecx - FILE_MAX
     jfa .fail
     call fs_find
-    if not carry                 ; файл уже есть — освобождаем старые блоки
+    if not carry                   ; файл уже есть — освобождаем старые блоки
         movzx eax - word [edi+DIR_BLOCK]
         call fs_free_chain
     else
@@ -223,15 +215,15 @@ fs_save:
     end
     mov [edi+DIR_SIZE] - ecx
     mov word [edi+DIR_BLOCK] - 0
-    let edx - "(ecx + 511) / 512"   ; сколько нужно блоков
+    let edx - "(ecx + 511) / 512"  ; сколько нужно блоков
     call fs_free_blocks
     if eax < edx
-        mov byte [edi] - 0       ; не поместился — файла больше нет
+        mov byte [edi] - 0         ; не поместился — файла больше нет
         call fs_flush
         mov eax - err_disk_full
         jmp .fail
     end
-    push edi                     ; дополнить последний блок нулями
+    push edi                       ; дополнить последний блок нулями
     let edi - "FILE_BUF + ecx"
     let ecx - "(512 - ecx % 512) % 512"
     xor eax - eax
@@ -239,7 +231,7 @@ fs_save:
     rep stosb
     pop edi
     mov esi - FILE_BUF
-    xor ebx - ebx                ; предыдущий блок (0 — его ещё нет)
+    xor ebx - ebx                  ; предыдущий блок (0 — его ещё нет)
     while edx != 0
         call fs_alloc
         if ebx = 0
@@ -258,19 +250,11 @@ fs_save:
     call fs_flush
     mov eax - err_io
     jfc .fail
-    pop edi
-    pop esi
-    pop edx
-    pop ecx
-    pop ebx
+    pop ebx - ecx - edx - esi - edi
     clc
     ret
 .fail:
-    pop edi
-    pop esi
-    pop edx
-    pop ecx
-    pop ebx
+    pop ebx - ecx - edx - esi - edi
     stc
     ret
 
@@ -305,9 +289,7 @@ fs_set_name:
 
 ; str_eq: равны ли строки esi и edi (до нулевого байта)? ZF=1 — равны.
 str_eq:
-    push eax
-    push esi
-    push edi
+    push eax - esi - edi
     repeat
         mov al - [esi]
         cmp al - [edi]
@@ -317,12 +299,10 @@ str_eq:
         chk al - al
     until zero                   ; дошли до конца обеих строк: ZF=1
 .done:
-    pop edi
-    pop esi
-    pop eax
+    pop eax - esi - edi
     ret
 
-err_too_big   b: "file too large (max 32 KB)" - 0
-err_dir_full  b: "directory is full (64 files)" - 0
-err_disk_full b: "disk is full" - 0
-err_io        b: "disk I/O error" - 0
+err_too_big   s: "file too large (max 32 KB)"
+err_dir_full  s: "directory is full (64 files)"
+err_disk_full s: "disk is full"
+err_io        s: "disk I/O error"

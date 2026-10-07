@@ -3,7 +3,7 @@
 og 0x7C00
 b 16
 
-CODE_SEL = 0x08              ; селекторы сегментов в GDT
+CODE_SEL = 0x08                  ; селекторы сегментов в GDT
 DATA_SEL = 0x10
 
 start:
@@ -14,13 +14,13 @@ start:
     mov ss - ax
     mov sp - 0x7C00
 
-    mov a20 - 1              ; включить линию A20
+    mov a20 - 1                  ; включить линию A20
 
-    lgdt [gdt_ptr]           ; загрузить таблицу дескрипторов
+    lgdt [gdt_ptr]               ; загрузить таблицу дескрипторов
     mov eax - cr0
-    or eax - 1               ; бит PE — защищённый режим
+    or eax - 1                   ; бит PE — защищённый режим
     mov cr0 - eax
-    jmp CODE_SEL:pm_start    ; дальний переход загружает cs
+    jmp CODE_SEL:pm_start        ; дальний переход загружает cs
 
 b 32
 pm_start:
@@ -31,13 +31,13 @@ pm_start:
     mov esp - 0x90000
 
     mov esi - text
-    mov edi - 0xB8000        ; текстовый видеобуфер
-    mov ah - 0x1F            ; белые буквы на синем фоне
+    mov edi - 0xB8000            ; текстовый видеобуфер
+    mov ah - 0x1F                ; белые буквы на синем фоне
 .next:
     nxtb
     chk al - al
     jfz .done
-    stosw                    ; символ + цвет
+    stosw                        ; символ + цвет
     jmp .next
 .done:
     hlt
@@ -46,15 +46,15 @@ pm_start:
 text b: "Gasem: 32-bit protected mode" - 0
 
 align 8 - 0
-gdt:                         ; глобальная таблица дескрипторов
-    q: 0                     ; нулевой дескриптор
-    q: 0x00CF9A000000FFFF    ; код: база 0, предел 4 ГБ, 32 бита
-    q: 0x00CF92000000FFFF    ; данные: база 0, предел 4 ГБ
+gdt:                             ; глобальная таблица дескрипторов
+    q: 0                         ; нулевой дескриптор
+    q: 0x00CF9A000000FFFF        ; код: база 0, предел 4 ГБ, 32 бита
+    q: 0x00CF92000000FFFF        ; данные: база 0, предел 4 ГБ
 gdt_end:
 
 gdt_ptr:
-    w: gdt_end-gdt-1         ; размер таблицы - 1
-    d: gdt                   ; адрес таблицы
+    w: gdt_end-gdt-1             ; размер таблицы - 1
+    d: gdt                       ; адрес таблицы
 
 && 510-($-$$) b: 0
 w: 0xAA55

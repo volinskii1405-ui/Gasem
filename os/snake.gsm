@@ -76,13 +76,13 @@ snake_game:
     mov [sn_dir] - eax
     mov ebx - [sn_head]
     movzx eax - word [SNAKE_BUF+ebx*2]
-    add eax - [sn_dir]           ; eax = новая клетка головы
+    add eax - [sn_dir]                ; eax = новая клетка головы
     mov dl - [VGA+eax*2]
     cmp dl - ' '
     jfe .move
     cmp dl - FOOD_CHAR
     jfne .dead
-    inc dword [sn_score]         ; съели еду
+    inc dword [sn_score]              ; съели еду
     add dword [sn_grow] - 3
     call sn_draw_score
     push eax
@@ -91,7 +91,7 @@ snake_game:
     pop eax
 .move:
     movzx ecx - word [SNAKE_BUF+ebx*2]
-    mov word [VGA+ecx*2] - BODY_CELL     ; старая голова становится телом
+    mov word [VGA+ecx*2] - BODY_CELL  ; старая голова становится телом
     inc ebx
     and ebx - SNAKE_MASK
     mov [sn_head] - ebx
@@ -114,9 +114,7 @@ snake_game:
     mov eax - 12
     mov ebx - 27
     call set_pos
-    mov bl - 0x4F
-    mov esi - sn_over
-    call puts_attr
+    call puts_attr - "  GAME OVER!  Score: " - 0x4F
     mov al - [cur_attr]
     mov byte [cur_attr] - 0x4F
     push eax
@@ -139,9 +137,7 @@ snake_game:
     mov eax - 14
     mov ebx - 30
     call set_pos
-    mov bl - 0x0F
-    mov esi - sn_press
-    call puts_attr
+    call puts_attr - "Press any key..." - 0x0F
     call getchar
 .exit:
     call clear_screen
@@ -149,8 +145,6 @@ snake_game:
     popad
     ret
 
-sn_over  b: "  GAME OVER!  Score: " - 0
-sn_press b: "Press any key..." - 0
 
 ; sn_key: обработать клавишу al
 sn_key:
@@ -198,9 +192,7 @@ sn_draw_field:
     mov eax - 1
     mov ebx - 1
     call set_pos
-    mov bl - 0x0F
-    mov esi - sn_title
-    call puts_attr
+    call puts_attr - "SNAKE    Score: 0          arrows / WASD - move,  Q - quit" - 0x0F
     ; верхняя и нижняя границы
     mov edi - VGA+2*80*2
     mov ax - BORDER_ATTR*256+0xC9
@@ -230,7 +222,6 @@ sn_draw_field:
     popad
     ret
 
-sn_title b: "SNAKE    Score: 0          arrows / WASD - move,  Q - quit" - 0
 
 ; sn_draw_score: обновить счёт в заголовке
 sn_draw_score:

@@ -24,11 +24,9 @@ kernel_main:
 ; disk_info: строка о диске при загрузке
 disk_info:
     if byte [fs_ready] = 0
-        mov esi - disk_none
-        jmp puts
+        jmp puts - "   Disk: no file system (type 'format' to create one).\n\n"
     end
-    mov esi - disk_fs
-    call puts
+    call puts - "   Disk: GasemFS, "
     xor eax - eax                ; сколько файлов
     mov esi - FS_DIR
     for ecx - 0 - FS_ENTRIES
@@ -38,21 +36,15 @@ disk_info:
         add esi - 32
     end
     call print_dec
-    mov esi - disk_files
-    call puts
+    call puts - " files, "
     call fs_free_blocks
     let eax - "eax / 2"
     call print_dec
-    mov esi - disk_free
-    jmp puts
+    jmp puts - " KB free. Try 'ls' and 'cat readme.txt'.\n\n"
 
-disk_fs    b: "   Disk: GasemFS, " - 0
-disk_files b: " files, " - 0
-disk_free  b: " KB free. Try 'ls' and 'cat readme.txt'." - 10 - 10 - 0
-disk_none  b: "   Disk: no file system (type 'format' to create one)." - 10 - 10 - 0
 
-os_name    b: "GasemOS" - 0
-os_version b: "0.1" - 0
+os_name    s: "GasemOS"
+os_version s: "0.1"
 
 logo:
     b: 10
@@ -65,4 +57,4 @@ logo:
 
 welcome:
     b: "   A tiny 32-bit operating system written in the Gasem language." - 10
-    b: "   Type 'help' to see the list of commands." - 10 - 0
+    s: "   Type 'help' to see the list of commands." - 10

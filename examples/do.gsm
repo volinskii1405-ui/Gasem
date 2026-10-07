@@ -9,15 +9,15 @@ start:
     mov ss - ax
     mov sp - 0x7C00
 
-    do "[msg]" - si          ; si -> "Hello"
+    do "[msg]" - si              ; si -> "Hello"
     call print
-    do "[msg] + 1" - si      ; si -> "Hello1"
+    do "[msg] + 1" - si          ; si -> "Hello1"
     call print
-    do "[msg] + [f]" - si    ; si -> "HelloWorld"
+    do "[msg] + [f]" - si        ; si -> "HelloWorld"
     call print
 
-    do "4+4" - ax            ; ax = 8
-    add al - '0'             ; цифра '8'
+    do "4+4" - ax                ; ax = 8
+    add al - '0'                 ; цифра '8'
     mov ah - 0x0E
     int 0x10
     jmp $

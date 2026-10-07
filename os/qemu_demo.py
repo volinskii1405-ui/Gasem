@@ -108,6 +108,7 @@ class Qemu:
         except OSError:
             pass
         self.proc.wait(timeout=10)
+        self.sock.close()
 
 
 def play_snake(vm, seconds, target=10):

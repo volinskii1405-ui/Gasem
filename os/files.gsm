@@ -8,8 +8,7 @@ name_buf2 b-24
 
 ; get_name: слово из строки esi → в буфер edi. CF=1 — имени нет или оно длиннее 23
 get_name:
-    push eax
-    push ecx
+    push eax - ecx
     xor ecx - ecx
     while byte [esi] != 0 and byte [esi] != ' ' and ecx < NAME_MAX
         mov al - [esi]
@@ -23,20 +22,15 @@ get_name:
     end
     call skip_spaces
     cmp ecx - 1                  ; CF=1, если ecx = 0
-    pop ecx
-    pop eax
+    pop eax - ecx
     ret
 
 ; need_fs: CF=1 (и сообщение), если на диске нет файловой системы
 need_fs:
     if byte [fs_ready] = 0
-        push esi
-        push ebx
-        mov bl - 0x0C
-        mov esi - msg_no_fs
-        call puts_attr
-        pop ebx
-        pop esi
+        push esi - ebx
+        call puts_attr - "No file system on this disk. Type 'format' to create one.\n" - 0x0C
+        pop esi - ebx
         stc
         ret
     end
@@ -45,30 +39,22 @@ need_fs:
 
 ; fs_error: напечатать «Error: <eax>» красным
 fs_error:
-    push esi
-    push ebx
-    mov bl - 0x0C
-    mov esi - msg_error
-    call puts_attr
+    push esi - ebx
+    call puts_attr - "Error: " - 0x0C
     mov esi - eax
     call puts_attr
     call newline
-    pop ebx
-    pop esi
+    pop esi - ebx
     ret
 
 ; not_found: «File not found: <name_buf>»
 not_found:
-    push esi
-    push ebx
-    mov bl - 0x0C
-    mov esi - msg_not_found
-    call puts_attr
+    push esi - ebx
+    call puts_attr - "File not found: " - 0x0C
     mov esi - name_buf
     call puts_attr
     call newline
-    pop ebx
-    pop esi
+    pop esi - ebx
     ret
 
 ; usage: напечатать строку esi и выйти из команды
@@ -77,8 +63,7 @@ usage:
 
 ; append_text: дописать строку esi и перевод строки в FILE_BUF+ecx, ecx += длина
 append_text:
-    push eax
-    push esi
+    push eax - esi
     while byte [esi] != 0
         mov al - [esi]
         mov [FILE_BUF+ecx] - al
@@ -87,8 +72,7 @@ append_text:
     end
     mov byte [FILE_BUF+ecx] - 10
     inc ecx
-    pop esi
-    pop eax
+    pop eax - esi
     ret
 
 ; save_report: сохранить FILE_BUF (ecx байт) в name_buf и сообщить результат
@@ -99,12 +83,10 @@ save_report:
     if carry
         call fs_error
     else
-        mov esi - msg_saved
-        call puts
+        call puts - "Saved "
         mov eax - ecx
         call print_dec
-        mov esi - msg_bytes_to
-        call puts
+        call puts - " bytes to "
         mov esi - name_buf
         call puts
         call newline
@@ -115,9 +97,7 @@ save_report:
 ; ---- ls
 cmd_ls:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     pushad
     xor ebx - ebx                ; файлов
     xor edx - edx                ; байт
@@ -125,10 +105,9 @@ cmd_ls:
     for edi - 0 - FS_ENTRIES
         if byte [esi] != 0
             push esi
-            mov esi - ls_indent
-            call puts
+            call puts - "  "
             pop esi
-            mov bl - 0x0F            ; имя — ярко-белым
+            mov bl - 0x0F        ; имя — ярко-белым
             call puts_attr
             mov bl - 0
             mov eax - 26
@@ -137,36 +116,30 @@ cmd_ls:
             mov ecx - 7
             call print_dec_w
             push esi
-            mov esi - msg_bytes
-            call puts
+            call puts - " bytes\n"
             pop esi
-            inc bh                   ; bh — счётчик файлов (bl занят цветом)
+            inc bh               ; bh — счётчик файлов (bl занят цветом)
             add edx - [esi+DIR_SIZE]
         end
         add esi - 32
     end
     movzx eax - bh
     call print_dec
-    mov esi - msg_files
-    call puts
+    call puts - " file(s), "
     mov eax - edx
     call print_dec
-    mov esi - msg_used
-    call puts
+    call puts - " bytes used, "
     call fs_free_blocks
     let eax - "eax / 2"          ; блоки по 512 байт → КБ
     call print_dec
-    mov esi - msg_free
-    call puts
+    call puts - " KB free\n"
     popad
     ret
 
 ; ---- cat <файл>
 cmd_cat:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf
     call get_name
     mov esi - use_cat
@@ -190,9 +163,7 @@ cmd_cat:
 ; ---- write <файл> <текст>
 cmd_write:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf
     call get_name
     push esi
@@ -211,9 +182,7 @@ cmd_write:
 ; ---- append <файл> <текст>
 cmd_append:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf
     call get_name
     push esi
@@ -240,9 +209,7 @@ cmd_append:
 ; ---- cp <откуда> <куда>
 cmd_cp:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf2          ; esi — аргументы, не портим его до второго имени
     call get_name
     jfc .usage
@@ -277,9 +244,7 @@ copy_name:
 ; ---- mv <старое> <новое>
 cmd_mv:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf
     call get_name
     jfc .usage
@@ -298,8 +263,7 @@ cmd_mv:
     mov esi - name_buf2
     call fs_set_name
     call fs_flush
-    mov esi - msg_renamed
-    jmp puts
+    jmp puts - "Renamed.\n"
 .usage:
     mov esi - use_mv
     jmp usage
@@ -307,9 +271,7 @@ cmd_mv:
 ; ---- rm <файл>
 cmd_rm:
     call need_fs
-    if carry
-        ret
-    end
+    ret if carry
     mov edi - name_buf
     call get_name
     mov esi - use_rm
@@ -318,8 +280,7 @@ cmd_rm:
     call fs_find
     jfc not_found
     call fs_delete
-    mov esi - msg_deleted
-    call puts
+    call puts - "Deleted "
     mov esi - name_buf
     call puts
     jmp newline
@@ -327,8 +288,7 @@ cmd_rm:
 ; ---- format
 cmd_format:
     call fs_format
-    mov esi - msg_formatted
-    jmp puts
+    jmp puts - "Disk formatted: empty GasemFS.\n"
 
 ; tab_to: дополнить строку пробелами до столбца eax
 tab_to:
@@ -361,23 +321,10 @@ print_dec_w:
     popad
     ret
 
-ls_indent     b: "  " - 0
-msg_bytes     b: " bytes" - 10 - 0
-msg_files     b: " file(s), " - 0
-msg_used      b: " bytes used, " - 0
-msg_free      b: " KB free" - 10 - 0
-msg_saved     b: "Saved " - 0
-msg_bytes_to  b: " bytes to " - 0
-msg_deleted   b: "Deleted " - 0
-msg_renamed   b: "Renamed." - 10 - 0
-msg_formatted b: "Disk formatted: empty GasemFS." - 10 - 0
-msg_error     b: "Error: " - 0
-msg_not_found b: "File not found: " - 0
-msg_no_fs     b: "No file system on this disk. Type 'format' to create one." - 10 - 0
-err_exists    b: "a file with this name already exists" - 0
-use_cat       b: "Usage: cat <file>" - 10 - 0
-use_write     b: "Usage: write <file> <text>" - 10 - 0
-use_append    b: "Usage: append <file> <text>" - 10 - 0
-use_cp        b: "Usage: cp <from> <to>" - 10 - 0
-use_mv        b: "Usage: mv <old> <new>" - 10 - 0
-use_rm        b: "Usage: rm <file>" - 10 - 0
+err_exists    s: "a file with this name already exists"
+use_cat       s: "Usage: cat <file>" - 10
+use_write     s: "Usage: write <file> <text>" - 10
+use_append    s: "Usage: append <file> <text>" - 10
+use_cp        s: "Usage: cp <from> <to>" - 10
+use_mv        s: "Usage: mv <old> <new>" - 10
+use_rm        s: "Usage: rm <file>" - 10

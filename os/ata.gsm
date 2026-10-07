@@ -64,14 +64,14 @@ ata_command:
     mov ecx - eax
     shr eax - 24
     and al - 0x0F
-    or al - 0xE0                 ; режим LBA, ведущее устройство
+    or al - 0xE0                    ; режим LBA, ведущее устройство
     mov dx - ATA_DRIVE
     out dx - al
     mov dx - ATA_COUNT
-    mov al - 1                   ; один сектор
+    mov al - 1                      ; один сектор
     out dx - al
     mov eax - ecx
-    for dx - ATA_LBA0 - ATA_LBA0+3     ; три байта номера сектора
+    for dx - ATA_LBA0 - ATA_LBA0+3  ; три байта номера сектора
         out dx - al
         shr eax - 8
     end
@@ -96,18 +96,16 @@ ata_command:
         end
         dec ecx
     end
-    stc                          ; ошибка или диск не ответил
+    stc                             ; ошибка или диск не ответил
     ret
 
 ; ata_idle: дождаться, пока диск не занят
 ata_idle:
-    push eax
-    push edx
+    push eax - edx
     mov dx - ATA_STATUS
     repeat
         in al - dx
         chk al - ST_BUSY
     until zero
-    pop edx
-    pop eax
+    pop eax - edx
     ret

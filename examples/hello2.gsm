@@ -1,0 +1,28 @@
+; Тот же загрузчик, что hello.gsm, но с новыми возможностями Gasem:
+; строки прямо в вызовах, call с аргументами, while/break if, push/pop списком.
+og 0x7C00
+b 16
+
+start:
+    xor ax - ax
+    mov ds - ax
+    call print - "Hello from Gasem!\r\n"
+    call print - "Strings live in the pool below."
+    jmp $
+
+; print: печать строки si через BIOS
+args print - si
+print:
+    push ax - si
+    while 1
+        nxtb
+        break if al = 0
+        mov ah - 0x0E
+        int 0x10
+    end
+    pop ax - si
+    ret
+
+pool                             ; сюда компилятор кладёт строки из вызовов
+&& 510-($-$$) b: 0
+w: 0xAA55

@@ -102,29 +102,25 @@ update_cursor:
 
 ; cursor_hide / cursor_show: спрятать и показать курсор
 cursor_hide:
-    push eax
-    push edx
+    push eax - edx
     mov dx - 0x3D4
     mov al - 0x0A
     out dx - al
     inc dx
     mov al - 0x20
     out dx - al
-    pop edx
-    pop eax
+    pop eax - edx
     ret
 
 cursor_show:
-    push eax
-    push edx
+    push eax - edx
     mov dx - 0x3D4
     mov al - 0x0A
     out dx - al
     inc dx
     mov al - 0x0E
     out dx - al
-    pop edx
-    pop eax
+    pop eax - edx
     ret
 
 ; set_pos: перенести курсор консоли в строку eax, столбец ebx
@@ -134,9 +130,9 @@ set_pos:
     jmp update_cursor
 
 ; puts: вывести строку esi (до нулевого байта)
+args puts - esi
 puts:
-    push eax
-    push esi
+    push eax - esi
 .next:
     nxtb
     chk al - al
@@ -144,11 +140,11 @@ puts:
     call putc
     jmp .next
 .done:
-    pop esi
-    pop eax
+    pop eax - esi
     ret
 
 ; puts_attr: вывести строку esi цветом bl
+args puts_attr - esi - bl
 puts_attr:
     push eax
     mov al - [cur_attr]
@@ -218,8 +214,7 @@ print_hex32:
 
 ; print_hex2: вывести al как 2 шестнадцатеричные цифры (и для BCD-чисел)
 print_hex2:
-    push eax
-    push eax
+    push eax - eax
     shr al - 4
     call hex_digit
     pop eax
@@ -268,8 +263,8 @@ status_init:
     popad
     ret
 
-st_uptime b: "uptime 00:00:00" - 0
-st_clock  b: "time 00:00:00" - 0
+st_uptime s: "uptime 00:00:00"
+st_clock  s: "time 00:00:00"
 
 ; status_update: eax = секунды с момента загрузки
 status_update:
@@ -305,9 +300,7 @@ status_update:
 
 ; vga_print: строка esi в видеопамять по адресу edi цветом ah
 vga_print:
-    push eax
-    push esi
-    push edi
+    push eax - esi - edi
 .next:
     nxtb
     chk al - al
@@ -315,9 +308,7 @@ vga_print:
     stosw
     jmp .next
 .done:
-    pop edi
-    pop esi
-    pop eax
+    pop eax - esi - edi
     ret
 
 ; vga_put_dec2: две десятичные цифры числа al (0..99) по адресу edi
@@ -346,8 +337,7 @@ vga_put_pair:                    ; al, ah — два символа; eax уже 
     mov [edi] - ax
     mov al - cl
     mov [edi+2] - ax
-    pop ecx
-    pop eax
+    pop eax - ecx
     ret
 
 ; cmos_read: прочитать регистр al часов реального времени (CMOS) → al

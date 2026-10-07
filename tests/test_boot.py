@@ -21,6 +21,10 @@ class BootTest(unittest.TestCase):
         # Цикл из документации печатает и завершающий 0 (проверка идёт после int 0x10).
         self.assertEqual(r.output, b"Hello\0")
 
+    def test_hello2(self):
+        r = run_boot(example("hello2.gsm"))
+        self.assertEqual(r.output, b"Hello from Gasem!\r\nStrings live in the pool below.")
+
     def test_do(self):
         r = run_boot(example("do.gsm"))
         self.assertEqual(r.output, b"Hello\r\nHello1\r\nHelloWorld\r\n8")

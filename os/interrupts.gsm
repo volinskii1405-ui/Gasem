@@ -29,16 +29,14 @@ idt_init:
 
 ; set_gate: вектор ecx → обработчик eax (шлюз прерывания, кольцо 0)
 set_gate:
-    push eax
-    push edi
+    push eax - edi
     lea edi - [IDT_ADDR+ecx*8]
     mov [edi] - ax               ; младшая половина адреса
     mov word [edi+2] - CODE_SEL
     mov word [edi+4] - 0x8E00    ; присутствует, 32-битный шлюз прерывания
     shr eax - 16
     mov [edi+6] - ax             ; старшая половина адреса
-    pop edi
-    pop eax
+    pop eax - edi
     ret
 
 idt_ptr:
@@ -130,10 +128,8 @@ exc_common:
     xchg ebx - ecx
     call set_pos
     xchg ebx - ecx
-    mov esi - panic_title
-    call puts
-    mov esi - panic_exc
-    call puts
+    call puts - "   *** KERNEL PANIC ***\n\n"
+    call puts - "   CPU exception #"
     mov eax - ebx
     call print_dec
     mov al - ':'
@@ -154,51 +150,43 @@ exc_common:
     jfnc .no_code
     pop ecx
 .no_code:
-    mov esi - panic_eip
-    call puts
+    call puts - "   EIP = 0x"
     pop eax                      ; eip, на котором случилось исключение
     call print_hex32
     mov edx - ERROR_CODE_MASK
     bt edx - ebx
     jfnc .halt_msg
-    mov esi - panic_code
-    call puts
+    call puts - "   error code = 0x"
     mov eax - ecx
     call print_hex32
 .halt_msg:
-    mov esi - panic_halt
-    call puts
+    call puts - "\n\n   The system has been halted. Restart the computer.\n"
 .halt:
     hlt
     jmp .halt
 
-panic_title  b: "   *** KERNEL PANIC ***" - 10 - 10 - 0
-panic_exc    b: "   CPU exception #" - 0
-panic_eip    b: "   EIP = 0x" - 0
-panic_code   b: "   error code = 0x" - 0
-panic_halt   b: 10 - 10 - "   The system has been halted. Restart the computer." - 10 - 0
-exc_reserved b: "Reserved" - 0
+exc_reserved s: "Reserved"
 
 exc_names:
     d: e00 - e01 - e02 - e03 - e04 - e05 - e06 - e07 - e08 - e09
     d: e10 - e11 - e12 - e13 - e14 - e15 - e16 - e17 - e18 - e19
-e00 b: "Divide Error" - 0
-e01 b: "Debug" - 0
-e02 b: "Non-Maskable Interrupt" - 0
-e03 b: "Breakpoint" - 0
-e04 b: "Overflow" - 0
-e05 b: "BOUND Range Exceeded" - 0
-e06 b: "Invalid Opcode" - 0
-e07 b: "Device Not Available" - 0
-e08 b: "Double Fault" - 0
-e09 b: "Coprocessor Segment Overrun" - 0
-e10 b: "Invalid TSS" - 0
-e11 b: "Segment Not Present" - 0
-e12 b: "Stack-Segment Fault" - 0
-e13 b: "General Protection Fault" - 0
-e14 b: "Page Fault" - 0
-e15 b: "Reserved" - 0
-e16 b: "x87 Floating-Point Error" - 0
-e17 b: "Alignment Check" - 0
-e18 b: "Machine Check" - 0
-e19 b: "SIMD Floating-Point Exception" - 0
+e00 s: "Divide Error"
+e01 s: "Debug"
+e02 s: "Non-Maskable Interrupt"
+e03 s: "Breakpoint"
+e04 s: "Overflow"
+e05 s: "BOUND Range Exceeded"
+e06 s: "Invalid Opcode"
+e07 s: "Device Not Available"
+e08 s: "Double Fault"
+e09 s: "Coprocessor Segment Overrun"
+e10 s: "Invalid TSS"
+e11 s: "Segment Not Present"
+e12 s: "Stack-Segment Fault"
+e13 s: "General Protection Fault"
+e14 s: "Page Fault"
+e15 s: "Reserved"
+e16 s: "x87 Floating-Point Error"
+e17 s: "Alignment Check"
+e18 s: "Machine Check"
+e19 s: "SIMD Floating-Point Exception"
