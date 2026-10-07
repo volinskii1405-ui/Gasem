@@ -15,14 +15,15 @@ sys.path.insert(0, os.path.join(HERE, "..", ".."))
 
 from gasem import x86  # noqa: E402
 from gasem.highlevel import CONTROL_WORDS  # noqa: E402
+from gasem.parser import BLOCK_WORDS  # noqa: E402
 
-GASEM_ALIASES = {"nxtb", "nxtw", "nxtd", "chk"} | {"jf" + cc for cc in x86.CC}
+GASEM_ALIASES = {"nxtb", "nxtw", "nxtd", "nxtq", "chk"} | {"jf" + cc for cc in x86.CC}
 MNEMONICS = sorted(x86.MNEMONICS | set(x86.ALIASES), key=lambda m: (-len(m), m))
 REGISTERS = sorted(x86.REGISTERS, key=lambda r: (-len(r), r))
 PREFIXES = sorted(set(x86.PREFIXES) | set(x86.SEG_PREFIX))
-CONTROL = sorted(CONTROL_WORDS - {"let"} | {"signed"})
+CONTROL = sorted(CONTROL_WORDS - {"let"} | {"signed"} | BLOCK_WORDS)
 DIRECTIVES = ["og", "align", "include", "incbin", "pool", "args", "equ"]
-SIZES = ["byte", "word", "dword", "qword", "short", "near", "far"]
+SIZES = ["byte", "word", "dword", "qword", "short", "near", "far", "rel", "abs"]
 
 ID = r"[A-Za-z_.\p{L}][\w.\p{L}]*"
 STMT_START = r"(?:^|(?<=:))\s*"            # начало строки или сразу после метки «имя:»
@@ -48,6 +49,7 @@ def grammar():
         "fileTypes": ["gsm"],
         "patterns": [
             {"include": "#comment"},
+            {"include": "#block-definition"},
             {"include": "#constant-definition"},
             {"include": "#data-label"},
             {"include": "#label"},
@@ -71,6 +73,13 @@ def grammar():
             "number": {
                 "name": "constant.numeric.gasem",
                 "match": r"\b(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9A-Fa-f_]*[hH]|[0-9][0-9_]*)\b",
+            },
+            "block-definition": {
+                "comment": "macro имя, proc имя, struct Имя — имя подсвечивается как объявление",
+                "match": rf"^\s*(?i:(macro|proc)|(struct))\s+({ID})",
+                "captures": {"1": {"name": "keyword.control.gasem"},
+                             "2": {"name": "keyword.control.gasem"},
+                             "3": {"name": "entity.name.function.gasem"}},
             },
             "constant-definition": {
                 "match": rf"^\s*({ID})\s*(=|\bequ\b)",
@@ -131,7 +140,7 @@ def grammar():
                 "patterns": [
                     {"include": "#comment"},
                     {"name": "punctuation.separator.operand.gasem", "match": r"(?<=\s)-(?=\s|$)"},
-                    {"name": "keyword.control.gasem", "match": r"(?i)\b(?:if|and|or|not|signed)\b"},
+                    {"name": "keyword.control.gasem", "match": r"(?i)\b(?:if|and|or|not|signed|uses)\b"},
                     {"name": "support.constant.flag.gasem",
                      "match": r"(?i)\b(?:zero|carry|sign|overflow|parity)\b"},
                     {"name": "support.constant.port.gasem", "match": r"(?i)\ba20\b"},

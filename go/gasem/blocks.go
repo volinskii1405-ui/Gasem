@@ -341,7 +341,7 @@ func (p *Parser) wordProc(word *Token, toks []*Token, loc *SourceLoc) {
 	}
 	var params []*Reg
 	for _, g := range groups[1:] {
-		params = append(params, regWord(g, "аргументы proc — регистры общего назначения", 8, 16, 32))
+		params = append(params, regWord(g, "аргументы proc — регистры общего назначения", 8, 16, 32, 64))
 	}
 	var uses []*Reg
 	if idx >= 0 {
@@ -350,7 +350,7 @@ func (p *Parser) wordProc(word *Token, toks []*Token, loc *SourceLoc) {
 			failCol("после uses перечисляются регистры: uses eax - ebx", toks[idx].Col)
 		}
 		for _, g := range ugroups {
-			uses = append(uses, regWord(g, "в uses перечисляются 16- или 32-битные регистры", 16, 32))
+			uses = append(uses, regWord(g, "в uses перечисляются 16-, 32- или 64-битные регистры", 16, 32, 64))
 		}
 	}
 	p.defineLabel(nameTok, loc)
@@ -444,12 +444,7 @@ func (p *Parser) wordLocal(word *Token, toks []*Token, loc *SourceLoc) {
 		Detail: "local " + strings.TrimSpace(tokensText(loc, toks)) + "    ; " + where})
 }
 
-func frameRegName(bits int) string {
-	if bits == 32 {
-		return "ebp"
-	}
-	return "bp"
-}
+func frameRegName(bits int) string { return FamilyNames[bits][5] }
 
 // localVar — локальная переменная текущей proc (ok=false — такой нет).
 func (p *Parser) localVar(name string) (localVar, bool) {
@@ -465,21 +460,13 @@ func (p *Parser) localVar(name string) (localVar, bool) {
 func (p *Parser) frameReg() *Reg {
 	for _, blk := range p.hl.blocks {
 		if blk.kind == "proc" {
-			if blk.bits == 32 {
-				return Registers["ebp"]
-			}
-			return Registers["bp"]
+			return Registers[FamilyNames[blk.bits][5]]
 		}
 	}
 	return Registers["bp"]
 }
 
-func accFor(bits int) *Reg {
-	if bits == 32 {
-		return Registers["eax"]
-	}
-	return Registers["ax"]
-}
+func accFor(bits int) *Reg { return Registers[FamilyNames[bits][0]] }
 
 func (p *Parser) wordReturn(word *Token, toks []*Token, loc *SourceLoc) {
 	blk := p.hl.procBlock(word)
@@ -491,13 +478,8 @@ func (p *Parser) wordReturn(word *Token, toks []*Token, loc *SourceLoc) {
 				failCol(fmt.Sprintf("return значение: %s восстанавливается из uses и затрёт результат", acc.Name), word.Col)
 			}
 		}
-		ro, isReg := op.(*RegOperand)
-		switch {
-		case isReg && ro.Reg == acc:
-		case isReg && ro.Reg.Kind == "gpr" && ro.Reg.Size < acc.Size:
-			p.hl.instr("movzx", []Operand{&RegOperand{acc}, op}, loc)
-		default:
-			p.hl.instr("mov", []Operand{&RegOperand{acc}, op}, loc)
+		if ro, isReg := op.(*RegOperand); !isReg || ro.Reg != acc {
+			p.emit(widenMove(acc, op, loc))
 		}
 	}
 	p.hl.jump("jmp", blk.exit, loc)

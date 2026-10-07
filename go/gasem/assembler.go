@@ -141,6 +141,8 @@ type assembler struct {
 	lineMap   []LineInfo
 	shift     *big.Int  // at: адрес, по которому код работает, минус адрес в файле
 	atStack   []atFrame // блоки at
+	curRel    map[string]int
+	prevRel   map[string]int
 }
 
 type atFrame struct {
@@ -148,7 +150,8 @@ type atFrame struct {
 }
 
 func newAssembler(p *Parser) *assembler {
-	return &assembler{stmts: p.statements, varDefs: p.varDefs, lines: p.lines, prev: map[string]*big.Int{}}
+	return &assembler{stmts: p.statements, varDefs: p.varDefs, lines: p.lines, prev: map[string]*big.Int{},
+		curRel: map[string]int{}}
 }
 
 func symbolsEqual(a, b map[string]*big.Int) bool {
@@ -202,6 +205,8 @@ func (a *assembler) assemble() (*Result, *Errors) {
 
 func (a *assembler) runPass(final bool) {
 	a.final = final
+	a.prevRel = a.curRel
+	a.curRel = map[string]int{}
 	a.cur = map[string]*big.Int{}
 	a.curOrder = nil
 	a.changed = false
@@ -267,12 +272,49 @@ func (a *assembler) knownNames() []string {
 	return out
 }
 
-func (a *assembler) define(name string, v *big.Int, col int) {
+func (a *assembler) define(name string, v *big.Int, col int, reloc int) {
 	if _, ok := a.cur[name]; ok {
 		failCol(fmt.Sprintf("имя '%s' уже определено", name), col)
 	}
 	a.cur[name] = v
+	a.curRel[name] = reloc
 	a.curOrder = append(a.curOrder, name)
+}
+
+// reloc — сколько раз в выражение входит адрес (метка, $, $$): 1 — это адрес в программе,
+// 0 — просто число. В режиме b 64 [адрес] кодируется относительно rip, [число] — как есть.
+func (a *assembler) reloc(node Expr) int {
+	switch n := node.(type) {
+	case *Sym:
+		if r, ok := a.curRel[n.Name]; ok {
+			return r
+		}
+		if r, ok := a.prevRel[n.Name]; ok {
+			return r
+		}
+		return 1
+	case *Here, *Start:
+		return 1
+	case *Unary:
+		r := a.reloc(n.X)
+		switch n.Op {
+		case "-":
+			return -r
+		case "+":
+			return r
+		}
+		return 0
+	case *Binary:
+		x, y := a.reloc(n.A), a.reloc(n.B)
+		switch n.Op {
+		case "+":
+			return x + y
+		case "-":
+			return x - y
+		}
+		return 0
+	}
+	return 0
 }
 
 func (a *assembler) here() *big.Int { return add(addInt(a.org, len(a.out)), a.shift) }
@@ -301,11 +343,11 @@ func (a *assembler) exec(st Stmt, rep string) {
 
 	switch s := st.(type) {
 	case *LabelStmt:
-		a.define(s.Name, here, s.Col)
+		a.define(s.Name, here, s.Col, 1)
 
 	case *ConstStmt:
 		v, _ := a.evalInt(s.Expr, here, false, "значение")
-		a.define(s.Name, v, s.Col)
+		a.define(s.Name, v, s.Col, a.reloc(s.Expr))
 
 	case *OrgStmt:
 		if n := len(a.atStack); n > 0 {
@@ -330,8 +372,8 @@ func (a *assembler) exec(st Stmt, rep string) {
 
 	case *BitsStmt:
 		v, _ := a.evalInt(s.Expr, here, true, "режим")
-		if !eqInt(v, 16) && !eqInt(v, 32) {
-			fail(fmt.Sprintf("поддерживаются режимы b 16 и b 32 (указано %s)", v))
+		if !eqInt(v, 16) && !eqInt(v, 32) && !eqInt(v, 64) {
+			fail(fmt.Sprintf("поддерживаются режимы b 16, b 32 и b 64 (указано %s)", v))
 		}
 		a.bits = small(v)
 
@@ -425,8 +467,10 @@ func (a *assembler) resolve(op Operand, here *big.Int) any {
 		if o.Disp != nil {
 			disp, known = a.evalInt(o.Disp, here, false, "значение")
 		}
+		rel := a.bits == 64 && o.Base == nil && o.Index == nil && o.Disp != nil && o.Mode != "abs" &&
+			!(o.Seg != nil && (o.Seg.Name == "fs" || o.Seg.Name == "gs")) && a.reloc(o.Disp) == 1
 		return &Mem{Size: o.Size, Seg: o.Seg, Base: o.Base, Index: o.Index, Scale: o.Scale, Disp: disp,
-			Known: known, HasDisp: o.Disp != nil, Jump: o.Jump}
+			Known: known, HasDisp: o.Disp != nil, Jump: o.Jump, Rel: rel}
 	case *ImmOperand:
 		v, known := a.evalInt(o.Expr, here, false, "значение")
 		return &Imm{Value: v, Known: known, Size: o.Size, Jump: o.Jump}

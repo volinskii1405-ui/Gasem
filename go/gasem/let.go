@@ -5,11 +5,7 @@ package gasem
 
 import "fmt"
 
-var regNames = map[int][]string{
-	8:  {"al", "cl", "dl", "bl"},
-	16: {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"},
-	32: {"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"},
-}
+var regNames = FamilyNames // имя регистра по размеру и семейству
 
 var tempOrder = []int{3, 6, 7, 1, 2, 5, 0} // ebx esi edi ecx edx ebp eax
 var low8Order = []int{3, 1, 2, 0}          // регистры, у которых есть младший байт
@@ -21,9 +17,9 @@ const (
 	famESP = 4
 )
 
-// family — семейство регистра: al/ah/ax/eax → 0, cl/ch/cx/ecx → 1 и т. д.
+// family — семейство регистра: al/ah/ax/eax/rax → 0, cl/ch/cx/ecx/rcx → 1, …, r15 → 15.
 func family(r *Reg) int {
-	if r.Size == 8 {
+	if r.High8 {
 		return r.Num & 3
 	}
 	return r.Num
@@ -112,20 +108,20 @@ func (c *letCompiler) compile(expr Expr, dest Operand, tok *Token) []letInstr {
 		if d.Reg.Kind != "gpr" {
 			c.error("приёмник let — регистр общего назначения или память")
 		}
-		if d.Reg.Size != 8 && d.Reg.Num == famESP {
+		if family(d.Reg) == famESP {
 			c.error("sp/esp нельзя использовать в let")
 		}
 		c.width = c.bits
-		if d.Reg.Size == 16 || d.Reg.Size == 32 {
+		if d.Reg.Size == 16 || d.Reg.Size == 32 || d.Reg.Size == 64 {
 			c.width = d.Reg.Size
 		}
 		destSize = d.Reg.Size
 	case *MemOperand:
-		if d.Size != 8 && d.Size != 16 && d.Size != 32 {
+		if d.Size != 8 && d.Size != 16 && d.Size != 32 && d.Size != 64 {
 			c.error("укажите размер приёмника: let dword [x] - \"...\"")
 		}
 		c.width = c.bits
-		if d.Size == 16 || d.Size == 32 {
+		if d.Size == 16 || d.Size == 32 || d.Size == 64 {
 			c.width = d.Size
 		}
 		destSize = d.Size
@@ -153,7 +149,7 @@ func (c *letCompiler) compile(expr Expr, dest Operand, tok *Token) []letInstr {
 			c.error("[имя] в let — это чтение памяти; запишите его без do-синтаксиса")
 		}
 		for _, r := range regs {
-			if r.Size != 8 && r.Num == famESP {
+			if family(r) == famESP {
 				c.error("sp/esp нельзя использовать в let: временные значения хранятся в стеке")
 			}
 			refsSet[family(r)] = true
@@ -168,7 +164,7 @@ func (c *letCompiler) compile(expr Expr, dest Operand, tok *Token) []letInstr {
 		destRegs = memRegs(m)
 	}
 	for _, r := range destRegs {
-		if r.Num == famESP {
+		if family(r) == famESP {
 			c.error("sp/esp нельзя использовать в let")
 		}
 	}
@@ -316,6 +312,19 @@ func (c *letCompiler) extend() string {
 	return "movzx"
 }
 
+// extendTo — расширить src (size бит) до ширины вычисления.
+func (c *letCompiler) extendTo(fam int, src Operand, size int) {
+	if size == 32 { // 32 → 64: movsxd или mov в 32-битную часть
+		if c.signed {
+			c.emit("movsxd", c.reg(fam), src)
+		} else {
+			c.emit("mov", c.regSized(fam, 32), src)
+		}
+		return
+	}
+	c.emit(c.extend(), c.reg(fam), src)
+}
+
 func (c *letCompiler) gen(node Expr, fam int) {
 	R := c.reg(fam)
 	if isConst(node) {
@@ -335,7 +344,7 @@ func (c *letCompiler) gen(node Expr, fam int) {
 				c.emit("mov", R, &RegOperand{r})
 			}
 		case r.Size < c.width:
-			c.emit(c.extend(), R, &RegOperand{r})
+			c.extendTo(fam, &RegOperand{r}, r.Size)
 		default:
 			c.emit("mov", R, c.reg(family(r)))
 		}
@@ -352,7 +361,7 @@ func (c *letCompiler) gen(node Expr, fam int) {
 		if size == c.width {
 			c.emit("mov", R, mem)
 		} else {
-			c.emit(c.extend(), R, mem)
+			c.extendTo(fam, mem, size)
 		}
 	case *Unary:
 		c.gen(n.X, fam)
@@ -466,11 +475,7 @@ func (c *letCompiler) apply(op string, fam int, b Expr) {
 			c.emit("mov", c.reg(famEAX), R)
 		}
 		if c.signed {
-			if c.width == 32 {
-				c.emit("cdq")
-			} else {
-				c.emit("cwd")
-			}
+			c.emit(map[int]string{16: "cwd", 32: "cdq", 64: "cqo"}[c.width])
 		} else {
 			c.emit("xor", c.reg(famEDX), c.reg(famEDX))
 		}

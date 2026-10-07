@@ -1,0 +1,82 @@
+; Загрузчик, который переводит процессор в 64-битный режим (long mode)
+; и печатает строку прямо в видеопамять.
+;
+;   gasem run examples/long.gsm        (нужен qemu-system-x86_64)
+;
+; Порядок: таблицы страниц (первые 2 МБ памяти отображаются сами на себя),
+; PAE в cr4, адрес таблиц в cr3, бит LME в регистре EFER, затем PE и PG
+; в cr0 одновременно — и дальний переход в 64-битный сегмент кода.
+
+og 0x7C00
+b 16
+
+PML4 = 0x1000                    ; таблицы страниц: 4 уровня по 4 КБ
+PDPT = 0x2000
+PD   = 0x3000
+EFER = 0xC0000080                ; регистр процессора с битом LME
+
+start:
+    cli
+    xor ax - ax
+    mov ds - ax
+    mov es - ax
+    mov ss - ax
+    mov sp - 0x7C00
+    mov a20 - 1
+
+    mov di - PML4                ; очистить три таблицы
+    mov cx - 3*4096/2
+    rep stosw
+    mov word [PML4] - PDPT + 3   ; присутствует + запись
+    mov word [PDPT] - PD + 3
+    mov word [PD] - 0x83         ; страница 2 МБ с адреса 0
+
+    lgdt [gdt_ptr]
+    mov eax - cr4
+    or eax - 0x20                ; PAE
+    mov cr4 - eax
+    mov eax - PML4
+    mov cr3 - eax
+    mov ecx - EFER
+    rdmsr
+    or eax - 0x100               ; LME — long mode
+    wrmsr
+    mov eax - cr0
+    or eax - 0x80000001          ; PG + PE
+    mov cr0 - eax
+    jmp 0x08:long_mode
+
+b 64
+long_mode:
+    mov ax - 0x10
+    mov ds - ax
+    mov es - ax
+    mov ss - ax
+    mov rsp - 0x90000
+
+    mov rdi - 0xB8000            ; очистить экран
+    mov ax - 0x0720
+    mov rcx - 80*25
+    rep stosw
+
+    mov rdi - 0xB8000                ; видеопамять
+    mov rsi - msg
+    mov ah - 0x0A                    ; светло-зелёный на чёрном
+    while byte [rsi] != 0
+        nxtb
+        stosw
+    end
+    mov rax - 0x1234_5678_9ABC_DEF0  ; настоящий 64-битный регистр
+    mov [result] - rax
+.halt:
+    hlt
+    jmp .halt
+
+gdt:     q: 0 - 0x00AF9A000000FFFF - 0x00CF92000000FFFF  ; пустой, код (64 бит), данные
+gdt_ptr: w: gdt_ptr-gdt-1
+         d: gdt
+msg:     s: "Gasem: 64-bit long mode"
+result:  q: 0
+
+&& 510-($-$$) b: 0
+w: 0xAA55

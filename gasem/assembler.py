@@ -57,6 +57,7 @@ class Assembler:
         self.var_defs = parser.var_defs
         self.lines = parser.lines
         self.prev = {}
+        self.cur_rel = {}
         self.final = False
 
     # ------------------------------------------------ проходы
@@ -83,6 +84,8 @@ class Assembler:
 
     def run_pass(self, final):
         self.final = final
+        self.prev_rel = self.cur_rel
+        self.cur_rel = {}
         self.cur = {}
         self.changed = False
         self.errors = []
@@ -116,15 +119,33 @@ class Assembler:
 
     # ------------------------------------------------ символы
 
+    def reloc(self, node):
+        """Сколько раз в выражение входит адрес (метка, $, $$): 1 — это адрес в программе,
+        0 — просто число. В режиме b 64 [адрес] кодируется относительно rip, [число] — как есть."""
+        if isinstance(node, N.Sym):
+            if node.name in self.cur_rel:
+                return self.cur_rel[node.name]
+            return self.prev_rel.get(node.name, 1)
+        if isinstance(node, (N.Here, N.Start)):
+            return 1
+        if isinstance(node, N.Unary):
+            r = self.reloc(node.x)
+            return {"-": -r, "+": r}.get(node.op, 0)
+        if isinstance(node, N.Binary):
+            a, b = self.reloc(node.a), self.reloc(node.b)
+            return {"+": a + b, "-": a - b}.get(node.op, 0)
+        return 0
+
     def lookup(self, name):
         if name in self.cur:
             return self.cur[name]
         return self.prev.get(name)
 
-    def define(self, name, value, col):
+    def define(self, name, value, col, reloc=0):
         if name in self.cur:
             raise GasemError(f"имя '{name}' уже определено", None, col)
         self.cur[name] = value
+        self.cur_rel[name] = reloc
 
     def here(self):
         return self.org + len(self.out) + self.shift
@@ -146,11 +167,11 @@ class Assembler:
         here = self.here()
 
         if isinstance(st, N.LabelStmt):
-            self.define(st.name, here, st.col)
+            self.define(st.name, here, st.col, 1)
 
         elif isinstance(st, N.ConstStmt):
             v, _ = self.eval_int(st.expr, here)
-            self.define(st.name, v, st.col)
+            self.define(st.name, v, st.col, self.reloc(st.expr))
 
         elif isinstance(st, N.OrgStmt):
             if self.at_stack:
@@ -171,8 +192,8 @@ class Assembler:
 
         elif isinstance(st, N.BitsStmt):
             v, _ = self.eval_int(st.expr, here, need_known=True, what="режим")
-            if v not in (16, 32):
-                raise GasemError(f"поддерживаются режимы b 16 и b 32 (указано {v})")
+            if v not in (16, 32, 64):
+                raise GasemError(f"поддерживаются режимы b 16, b 32 и b 64 (указано {v})")
             self.bits = v
 
         elif isinstance(st, N.AlignStmt):
@@ -243,8 +264,11 @@ class Assembler:
                 disp, known = self.eval_int(op.disp, here)
             else:
                 disp, known = 0, True
+            rel = (self.bits == 64 and op.base is None and op.index is None and op.disp is not None
+                   and op.mode != "abs" and not (op.seg is not None and op.seg.name in ("fs", "gs"))
+                   and self.reloc(op.disp) == 1)
             return x86.Mem(op.size, op.seg, op.base, op.index, op.scale, disp, known,
-                           op.disp is not None, op.jump)
+                           op.disp is not None, op.jump, rel)
         if isinstance(op, N.ImmOperand):
             v, known = self.eval_int(op.expr, here)
             return x86.Imm(v, known, op.size, op.jump)

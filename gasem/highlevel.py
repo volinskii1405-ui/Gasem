@@ -176,9 +176,8 @@ class HighLevel:
         return blk
 
     def frame_regs(self, blk):
-        if blk.bits == 32:
-            return x86.REGISTERS["ebp"], x86.REGISTERS["esp"]
-        return x86.REGISTERS["bp"], x86.REGISTERS["sp"]
+        names = x86.FAMILY_NAMES[blk.bits]
+        return x86.REGISTERS[names[5]], x86.REGISTERS[names[4]]      # bp/ebp/rbp, sp/esp/rsp
 
     def prologue(self, blk, loc):
         """Начало тела proc: кадр для локальных переменных и сохранение регистров uses."""
@@ -436,19 +435,15 @@ class HighLevel:
 
 # ---------------------------------------------------------------- let
 
-_NAMES = {
-    8: ["al", "cl", "dl", "bl"],
-    16: ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
-    32: ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"],
-}
+_NAMES = x86.FAMILY_NAMES                 # имя регистра по размеру и семейству
 _TEMP_ORDER = [3, 6, 7, 1, 2, 5, 0]       # ebx esi edi ecx edx ebp eax
 _LOW8_ORDER = [3, 1, 2, 0]                # регистры, у которых есть младший байт
 EAX, ECX, EDX, ESP = 0, 1, 2, 4
 
 
 def family(r):
-    """Семейство регистра: al/ah/ax/eax → 0, cl/ch/cx/ecx → 1 и т. д."""
-    return r.num & 3 if r.size == 8 else r.num
+    """Семейство регистра: al/ah/ax/eax/rax → 0, cl/ch/cx/ecx/rcx → 1, …, r15 → 15."""
+    return r.num & 3 if r.high8 else r.num
 
 
 _family = family
@@ -508,14 +503,14 @@ class LetCompiler:
             d = dest.reg
             if d.kind != "gpr":
                 _error("приёмник let — регистр общего назначения или память", tok)
-            if d.size != 8 and d.num == ESP:
+            if _family(d) == ESP:
                 _error("sp/esp нельзя использовать в let", tok)
-            self.width = d.size if d.size in (16, 32) else self.bits
+            self.width = d.size if d.size in (16, 32, 64) else self.bits
             dest_size = d.size
         elif isinstance(dest, N.MemOperand):
-            if dest.size not in (8, 16, 32):
+            if dest.size not in (8, 16, 32, 64):
                 _error("укажите размер приёмника: let dword [x] - \"...\"", tok)
-            self.width = dest.size if dest.size in (16, 32) else self.bits
+            self.width = dest.size if dest.size in (16, 32, 64) else self.bits
             dest_size = dest.size
         else:
             _error("приёмник let — регистр общего назначения или память", tok)
@@ -535,7 +530,7 @@ class LetCompiler:
             elif isinstance(node, N.Var):
                 _error("[имя] в let — это чтение памяти; запишите его без do-синтаксиса", tok)
             for r in regs:
-                if r.size != 8 and r.num == ESP:
+                if _family(r) == ESP:
                     _error("sp/esp нельзя использовать в let: временные значения хранятся в стеке", tok)
                 refs.add(_family(r))
                 count[_family(r)] = count.get(_family(r), 0) + 1
@@ -544,7 +539,7 @@ class LetCompiler:
                     self.var_shift = True
         dest_regs = _mem_regs(dest) if isinstance(dest, N.MemOperand) else []
         for r in dest_regs:
-            if r.num == ESP:
+            if _family(r) == ESP:
                 _error("sp/esp нельзя использовать в let", tok)
 
         # простые случаи: число или одно значение
@@ -641,7 +636,7 @@ class LetCompiler:
                 if _family(r) != fam:
                     self.emit("mov", R, N.RegOperand(r))
             elif r.size < self.width:
-                self.emit("movsx" if self.signed else "movzx", R, N.RegOperand(r))
+                self.extend(fam, N.RegOperand(r), r.size)
             else:
                 self.emit("mov", R, self.reg(_family(r)))
         elif isinstance(node, N.MemNode):
@@ -653,7 +648,7 @@ class LetCompiler:
             if size == self.width:
                 self.emit("mov", R, mem)
             else:
-                self.emit("movsx" if self.signed else "movzx", R, mem)
+                self.extend(fam, mem, size)
         elif isinstance(node, N.Unary):
             self.gen(node.x, fam)
             if node.op == "-":
@@ -678,6 +673,16 @@ class LetCompiler:
             self.apply(op, fam, b)
         else:
             _error("в let недопустимо такое выражение", self.tok)
+
+    def extend(self, fam, src, size):
+        """Расширить src (size бит) до ширины вычисления."""
+        if size == 32:                          # 32 → 64: movsxd или mov в 32-битную часть
+            if self.signed:
+                self.emit("movsxd", self.reg(fam), src)
+            else:
+                self.emit("mov", self.reg(fam, 32), src)
+        else:
+            self.emit("movsx" if self.signed else "movzx", self.reg(fam), src)
 
     def apply(self, op, fam, b):
         R = self.reg(fam)
@@ -734,7 +739,7 @@ class LetCompiler:
             if fam != EAX:
                 self.emit("mov", self.reg(EAX), R)
             if self.signed:
-                self.emit("cdq" if self.width == 32 else "cwd")
+                self.emit({16: "cwd", 32: "cdq", 64: "cqo"}[self.width])
             else:
                 self.emit("xor", self.reg(EDX), self.reg(EDX))
             self.emit("idiv" if self.signed else "div", self.reg(t))

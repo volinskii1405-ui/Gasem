@@ -30,7 +30,8 @@ WORDS = ["mov", "if", "end", "else", "elif", "while", "for", "let", "do", "b:", 
          "short", "far", "$", "$$", "510-($-$$)", '"str"', "'c'", "nxtb", "chk", "jfnz", "a20", "es:[di]",
          "1<<4", "-1", "label:", ".loc:", "x = 5", "ret if carry", "break if al = 1", "int 0x10",
          "macro m - a", "proc f - esi", "uses ebx", "local v - dword", "return", "return eax",
-         "struct P", "x: w", "P 1 - 2", "at 0x500", "m eax", "[v]", "P.x"]
+         "struct P", "x: w", "P 1 - 2", "at 0x500", "m eax", "[v]", "P.x",
+         "b 64", "rax", "r8", "r12d", "sil", "[abs 0x10]", "movsxd", "cqo", "push rax", "syscall", "qword"]
 
 EDGE_CASES = [
     "q: 0xFFFFFFFFFFFFFFFF - -1 - 0x10000000000000000", "d: 0xFFFFFFFFFFFFFFFF", "X = 1 << 4096\nb: X >> 4090",
@@ -53,6 +54,10 @@ EDGE_CASES = [
     "struct P\n    x w\nend", "struct P\n    size: b\nend\nP 1 - 2 - 3",
     "og 0x7C00\nat 0x50000\nb 32\nx: jmp x\nmov eax - $$\nend\ny: nop", "at nothing\nnop\nend",
     "og 0x7C00\nnop\nat 0x500\nog 0x600\nend",
+    "b 64\nmov rax - 0x123456789\nmov r8d - -1\npush r12\nmov [x] - rax\nmov eax - [abs 0x1234]\n"
+    "lea rsi - [x]\nmovsxd rcx - eax\nx: q: 0", "b 64\nlet rax - \"rbx * r9 + [q] / 3\"\nq: q: 5",
+    "b 64\nproc f - rdi uses rbx\n    local t - qword\n    mov [t] - rdi\n    return [t]\nend",
+    "b 64\npush eax", "b 64\nmov ah - sil", "mov r8 - 1", "b 64\nadd rax - 0x80000000", "b 64\njcxz $",
 ]
 
 

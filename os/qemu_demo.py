@@ -28,14 +28,14 @@ KEYS = {" ": "spc", "\n": "ret", "-": "minus", "=": "equal", "+": "shift-equal",
 
 
 class Qemu:
-    def __init__(self, image, workdir):
+    def __init__(self, image, workdir, qemu=None, args=()):
         self.sock_path = os.path.join(workdir, "monitor.sock")
-        qemu = shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64")
+        qemu = qemu or shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64")
         if not qemu:
             sys.exit("qemu-system-i386 не найден")
         self.proc = subprocess.Popen(
             [qemu, "-m", "128", "-drive", f"format=raw,file={image}", "-display", "none",
-             "-monitor", f"unix:{self.sock_path},server,nowait", "-no-reboot"],
+             "-monitor", f"unix:{self.sock_path},server,nowait", "-no-reboot", *args],
             cwd=workdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.workdir = workdir
         for _ in range(100):

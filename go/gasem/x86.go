@@ -12,30 +12,59 @@ import (
 // ---------------------------------------------------------------- регистры
 
 type Reg struct {
-	Name string
-	Size int
-	Num  int
-	Kind string // gpr / seg / cr / dr
+	Name  string
+	Size  int
+	Num   int    // 0..15 (r8–r15 — 8..15)
+	Kind  string // gpr / seg / cr / dr
+	High8 bool   // ah, ch, dh, bh
+	X64   bool   // есть только в режиме b 64
+}
+
+func highNames(format string) []string {
+	out := make([]string, 8)
+	for i := range out {
+		out[i] = fmt.Sprintf(format, i+8)
+	}
+	return out
+}
+
+var highNums = []int{8, 9, 10, 11, 12, 13, 14, 15}
+
+// FamilyNames — имена регистров по размеру и семейству (0 = rax … 15 = r15).
+var FamilyNames = map[int][]string{
+	8:  append(strings.Fields("al cl dl bl spl bpl sil dil"), highNames("r%db")...),
+	16: append(strings.Fields("ax cx dx bx sp bp si di"), highNames("r%dw")...),
+	32: append(strings.Fields("eax ecx edx ebx esp ebp esi edi"), highNames("r%dd")...),
+	64: append(strings.Fields("rax rcx rdx rbx rsp rbp rsi rdi"), highNames("r%d")...),
 }
 
 // Registers — все регистры по имени.
 var Registers = func() map[string]*Reg {
 	m := map[string]*Reg{}
-	add := func(names []string, size int, kind string, nums []int) {
+	add := func(names []string, size int, kind string, nums []int, x64 bool) {
 		for i, name := range names {
 			num := i
 			if nums != nil {
 				num = nums[i]
 			}
-			m[name] = &Reg{name, size, num, kind}
+			high8 := name == "ah" || name == "ch" || name == "dh" || name == "bh"
+			m[name] = &Reg{name, size, num, kind, high8, x64}
 		}
 	}
-	add(strings.Fields("al cl dl bl ah ch dh bh"), 8, "gpr", nil)
-	add(strings.Fields("ax cx dx bx sp bp si di"), 16, "gpr", nil)
-	add(strings.Fields("eax ecx edx ebx esp ebp esi edi"), 32, "gpr", nil)
-	add(strings.Fields("es cs ss ds fs gs"), 16, "seg", nil)
-	add([]string{"cr0", "cr2", "cr3", "cr4"}, 32, "cr", []int{0, 2, 3, 4})
-	add(strings.Fields("dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7"), 32, "dr", nil)
+	add(strings.Fields("al cl dl bl ah ch dh bh"), 8, "gpr", nil, false)
+	add(strings.Fields("ax cx dx bx sp bp si di"), 16, "gpr", nil, false)
+	add(strings.Fields("eax ecx edx ebx esp ebp esi edi"), 32, "gpr", nil, false)
+	add(strings.Fields("es cs ss ds fs gs"), 16, "seg", nil, false)
+	add([]string{"cr0", "cr2", "cr3", "cr4"}, 32, "cr", []int{0, 2, 3, 4}, false)
+	add(strings.Fields("dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7"), 32, "dr", nil, false)
+	// только в режиме b 64
+	add(strings.Fields("spl bpl sil dil"), 8, "gpr", []int{4, 5, 6, 7}, true)
+	add(highNames("r%db"), 8, "gpr", highNums, true)
+	add(highNames("r%dw"), 16, "gpr", highNums, true)
+	add(highNames("r%dd"), 32, "gpr", highNums, true)
+	add(strings.Fields("rax rcx rdx rbx rsp rbp rsi rdi"), 64, "gpr", nil, true)
+	add(highNames("r%d"), 64, "gpr", highNums, true)
+	add([]string{"cr8"}, 64, "cr", []int{8}, true)
 	return m
 }()
 
@@ -52,6 +81,7 @@ type Mem struct {
 	Disp             *big.Int
 	Known, HasDisp   bool
 	Jump             string
+	Rel              bool // b 64: адрес относительно rip (адрес метки, а не число)
 }
 
 // direct — адрес без регистров: [0x1234], [msg].
@@ -92,6 +122,7 @@ var simpleOps = map[string][]byte{
 	"aas": {0x3f}, "cpuid": {0x0f, 0xa2}, "rdtsc": {0x0f, 0x31}, "rdmsr": {0x0f, 0x32},
 	"wrmsr": {0x0f, 0x30}, "wbinvd": {0x0f, 0x09}, "invd": {0x0f, 0x08}, "clts": {0x0f, 0x06},
 	"ud2": {0x0f, 0x0b}, "pause": {0xf3, 0x90},
+	"syscall": {0x0f, 0x05}, "sysret": {0x0f, 0x07}, "swapgs": {0x0f, 0x01, 0xf8},
 }
 
 type sizedOp struct {
@@ -113,7 +144,17 @@ var sizedOps = map[string]sizedOp{
 	"scasb": {0xAE, 8}, "scasw": {0xAF, 16}, "scasd": {0xAF, 32},
 	"insb": {0x6C, 8}, "insw": {0x6D, 16}, "insd": {0x6D, 32},
 	"outsb": {0x6E, 8}, "outsw": {0x6F, 16}, "outsd": {0x6F, 32},
+	"pushfq": {0x9C, 0}, "popfq": {0x9D, 0}, "iretq": {0xCF, 64}, "cdqe": {0x98, 64}, "cqo": {0x99, 64},
+	"movsq": {0xA5, 64}, "cmpsq": {0xA7, 64}, "stosq": {0xAB, 64}, "lodsq": {0xAD, 64}, "scasq": {0xAF, 64},
 }
+
+// только в режиме b 64 / нет в режиме b 64
+var only64 = map[string]bool{"syscall": true, "sysret": true, "swapgs": true, "pushfq": true, "popfq": true,
+	"iretq": true, "cdqe": true, "cqo": true, "movsq": true, "cmpsq": true, "stosq": true, "lodsq": true,
+	"scasq": true, "movsxd": true, "jrcxz": true}
+var no64 = map[string]bool{"pusha": true, "popa": true, "pushad": true, "popad": true, "pushfd": true,
+	"popfd": true, "aaa": true, "aas": true, "daa": true, "das": true, "into": true, "lds": true, "les": true,
+	"jcxz": true}
 
 var aluOps = map[string]int{"add": 0, "or": 1, "adc": 2, "sbb": 3, "and": 4, "sub": 5, "xor": 6, "cmp": 7}
 var shiftOps = map[string]int{"rol": 0, "ror": 1, "rcl": 2, "rcr": 3, "shl": 4, "sal": 4, "shr": 5, "sar": 7}
@@ -145,11 +186,11 @@ var segPush = map[string][]byte{"es": {0x06}, "cs": {0x0e}, "ss": {0x16}, "ds": 
 var segPop = map[string][]byte{"es": {0x07}, "ss": {0x17}, "ds": {0x1f}, "fs": {0x0f, 0xa1}, "gs": {0x0f, 0xa9}}
 
 var otherOps = strings.Fields(`mov test inc dec imul push pop xchg lea movzx movsx
-	jmp call ret retf loop loope loopne jcxz jecxz int in out enter bsf bsr bswap`)
+	jmp call ret retf loop loope loopne jcxz jecxz int in out enter bsf bsr bswap movsxd jrcxz`)
 
 // Aliases — псевдонимы Gasem и синонимы x86.
 var Aliases = map[string]string{
-	"nxtb": "lodsb", "nxtw": "lodsw", "nxtd": "lodsd",
+	"nxtb": "lodsb", "nxtw": "lodsw", "nxtd": "lodsd", "nxtq": "lodsq",
 	"chk":  "test",
 	"retn": "ret", "loopz": "loope", "loopnz": "loopne", "xlat": "xlatb",
 }
@@ -243,6 +284,32 @@ func isRM(o any) bool { return isGpr(o) || isMem(o) }
 
 func isAcc(o any) bool { return isGpr(o) && o.(*Reg).Num == 0 }
 
+// opRegs — все регистры команды, включая регистры в адресе.
+func opRegs(ops []any) []*Reg {
+	var out []*Reg
+	for _, o := range ops {
+		switch x := o.(type) {
+		case *Reg:
+			out = append(out, x)
+		case *Mem:
+			for _, r := range []*Reg{x.Seg, x.Base, x.Index} {
+				if r != nil {
+					out = append(out, r)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// fitsS32 — число, которое процессор в режиме b 64 расширит знаком из 32 бит.
+func fitsS32(v *big.Int) bool {
+	if cmpInt(v, -(1<<31)) >= 0 && cmpInt(v, 1<<31) < 0 {
+		return true
+	}
+	return v.Cmp(sub(pow2(64), pow2(31))) >= 0 && v.Cmp(pow2(64)) < 0
+}
+
 // opSizeOf — размер регистра или памяти (0 — не указан).
 func opSizeOf(o any) int {
 	switch x := o.(type) {
@@ -278,15 +345,20 @@ func cat(parts ...[]byte) []byte {
 }
 
 type encoder struct {
-	ctx  encodeCtx
-	bits int
-	pre  []byte
-	mn   string
+	ctx   encodeCtx
+	bits  int
+	osize int // размер операнда без префикса
+	pre   []byte
+	mn    string
+	ops   []any
 }
 
 // encode кодирует одну команду.
 func encode(mnemonic string, operands []any, prefixes []byte, ctx encodeCtx) []byte {
-	e := &encoder{ctx: ctx, bits: ctx.bits(), pre: prefixes, mn: mnemonic}
+	e := &encoder{ctx: ctx, bits: ctx.bits(), osize: ctx.bits(), pre: prefixes, mn: mnemonic}
+	if e.bits == 64 {
+		e.osize = 32
+	}
 	return e.encode(operands)
 }
 
@@ -330,6 +402,26 @@ func (e *encoder) imm(o any, size int, signed bool) []byte {
 	}
 	e.checkRange(x.Value, size, signed)
 	return pack(x.Value, size/8)
+}
+
+func (e *encoder) checkS32(v *big.Int, what string) {
+	if e.ctx.final() && !fitsS32(v) {
+		fail(fmt.Sprintf("%s %s не помещается в 32 бита со знаком (в режиме b 64 такие числа расширяются "+
+			"знаком; 64-битное число можно загрузить только в регистр: mov rax - число)", what, v))
+	}
+}
+
+// immOp — число операнда: для 64-битных операций — 32 бита со знаком.
+func (e *encoder) immOp(o any, size int) []byte {
+	if size != 64 {
+		return e.imm(o, size, true)
+	}
+	x, ok := o.(*Imm)
+	if !ok {
+		e.bad()
+	}
+	e.checkS32(x.Value, "значение")
+	return pack(x.Value, 4)
 }
 
 func (e *encoder) immS8(o *Imm, size int) []byte {
@@ -382,7 +474,7 @@ func (e *encoder) opSize(ops ...any) int {
 			"(например: %s word [x] - 1)", e.mn, e.mn))
 	}
 	size := sizes[0]
-	if size != 8 && size != 16 && size != 32 {
+	if size != 8 && size != 16 && size != 32 && !(size == 64 && e.bits == 64) {
 		fail(fmt.Sprintf("%s: размер %d бит здесь недопустим", e.mn, size))
 	}
 	return size
@@ -427,12 +519,17 @@ func (e *encoder) dispBytes(m *Mem, lvl, asize int) []byte {
 	if lvl == 1 {
 		return []byte{lowByte(m.Disp)}
 	}
+	if asize == 64 {
+		e.checkS32(m.Disp, "смещение")
+		return pack(m.Disp, 4)
+	}
 	e.checkRange(m.Disp, asize, true)
 	return pack(m.Disp, asize/8)
 }
 
-// memEncode → (размер адреса, байты ModRM [+ SIB] [+ смещение]).
-func (e *encoder) memEncode(reg int, m *Mem) (int, []byte) {
+// memEncode → размер адреса, байты ModRM [+ SIB] [+ смещение], биты REX.X/B
+// и адрес для адресации относительно rip (nil — не нужна).
+func (e *encoder) memEncode(reg int, m *Mem) (int, []byte, int, *big.Int) {
 	var regs []*Reg
 	for _, r := range []*Reg{m.Base, m.Index} {
 		if r != nil {
@@ -445,17 +542,21 @@ func (e *encoder) memEncode(reg int, m *Mem) (int, []byte) {
 		}
 	}
 	if len(regs) == 2 && regs[0].Size != regs[1].Size {
-		fail("в адресе нельзя смешивать 16- и 32-битные регистры")
+		a, b := min(regs[0].Size, regs[1].Size), max(regs[0].Size, regs[1].Size)
+		fail(fmt.Sprintf("в адресе нельзя смешивать %d- и %d-битные регистры", a, b))
 	}
 	asize := e.bits
 	if len(regs) > 0 {
 		asize = regs[0].Size
 	}
+	if asize == 16 && e.bits == 64 {
+		fail("в режиме b 64 нет 16-битной адресации — используйте 64-битные регистры (rbx, rsi, …)")
+	}
 
 	if asize == 16 {
 		if len(regs) == 0 {
 			e.checkRange(m.Disp, 16, true)
-			return 16, cat([]byte{byte(reg<<3 | 6)}, pack(m.Disp, 2))
+			return 16, cat([]byte{byte(reg<<3 | 6)}, pack(m.Disp, 2)), 0, nil
 		}
 		if m.Index != nil && m.Scale != 1 {
 			fail("масштаб (*2, *4, *8) недоступен в 16-битной адресации")
@@ -472,61 +573,138 @@ func (e *encoder) memEncode(reg int, m *Mem) (int, []byte) {
 				"bx+si, bx+di, bp+si, bp+di (плюс смещение)", strings.Join(names, "+")))
 		}
 		lvl := e.dispLevel(m, 16, rm == 6)
-		return 16, cat([]byte{byte(lvl<<6 | reg<<3 | rm)}, e.dispBytes(m, lvl, 16))
+		return 16, cat([]byte{byte(lvl<<6 | reg<<3 | rm)}, e.dispBytes(m, lvl, 16)), 0, nil
 	}
 
 	base, index, scale := m.Base, m.Index, m.Scale
 	if index != nil && base == nil && scale == 2 {
 		base, scale = index, 1 // [eax*2] → [eax+eax]: короче
 	}
+	rex := 0
+	if index != nil && index.Num >= 8 {
+		rex |= 2
+	}
+	if base != nil && base.Num >= 8 {
+		rex |= 1
+	}
 	if base == nil && index == nil {
+		if e.bits == 64 {
+			if m.Rel { // [метка] — относительно rip
+				return 64, []byte{byte(reg<<3 | 5), 0, 0, 0, 0}, 0, m.Disp
+			}
+			e.checkS32(m.Disp, "адрес")
+			return 64, cat([]byte{byte(reg<<3 | 4), 0x25}, pack(m.Disp, 4)), 0, nil
+		}
 		e.checkRange(m.Disp, 32, true)
-		return 32, cat([]byte{byte(reg<<3 | 5)}, pack(m.Disp, 4))
+		return 32, cat([]byte{byte(reg<<3 | 5)}, pack(m.Disp, 4)), 0, nil
 	}
 	if index == nil {
-		lvl := e.dispLevel(m, 32, base.Num == 5)
-		if base.Num == 4 { // esp требует SIB
-			return 32, cat([]byte{byte(lvl<<6 | reg<<3 | 4), 0x24}, e.dispBytes(m, lvl, 32))
+		lvl := e.dispLevel(m, asize, base.Num&7 == 5)
+		if base.Num&7 == 4 { // esp/rsp/r12 требуют SIB
+			return asize, cat([]byte{byte(lvl<<6 | reg<<3 | 4), 0x24}, e.dispBytes(m, lvl, asize)), rex, nil
 		}
-		return 32, cat([]byte{byte(lvl<<6 | reg<<3 | base.Num)}, e.dispBytes(m, lvl, 32))
+		return asize, cat([]byte{byte(lvl<<6 | reg<<3 | base.Num&7)}, e.dispBytes(m, lvl, asize)), rex, nil
 	}
 	if index.Num == 4 {
-		fail("esp нельзя использовать как индексный регистр")
+		fail(fmt.Sprintf("%s нельзя использовать как индексный регистр", index.Name))
 	}
 	sb, ok := scaleBits[scale]
 	if !ok {
 		fail("масштаб должен быть 1, 2, 4 или 8")
 	}
-	sibHi := sb<<6 | index.Num<<3
+	sibHi := sb<<6 | (index.Num&7)<<3
 	if base == nil {
-		e.checkRange(m.Disp, 32, true)
-		return 32, cat([]byte{byte(reg<<3 | 4), byte(sibHi | 5)}, pack(m.Disp, 4))
+		if asize == 64 {
+			e.checkS32(m.Disp, "смещение")
+		} else {
+			e.checkRange(m.Disp, 32, true)
+		}
+		return asize, cat([]byte{byte(reg<<3 | 4), byte(sibHi | 5)}, pack(m.Disp, 4)), rex, nil
 	}
-	lvl := e.dispLevel(m, 32, base.Num == 5)
-	return 32, cat([]byte{byte(lvl<<6 | reg<<3 | 4), byte(sibHi | base.Num)}, e.dispBytes(m, lvl, 32))
+	lvl := e.dispLevel(m, asize, base.Num&7 == 5)
+	return asize, cat([]byte{byte(lvl<<6 | reg<<3 | 4), byte(sibHi | base.Num&7)}, e.dispBytes(m, lvl, asize)), rex, nil
 }
 
 // build собирает команду: префиксы + опкод + ModRM/SIB/смещение + число.
 func (e *encoder) build(opcode []byte, size int, rm any, reg int, immBytes []byte) []byte {
+	return e.buildX(opcode, size, rm, reg, immBytes, nil, false)
+}
+
+// buildX — build с регистром в опкоде (oreg: push rax, mov r8 - 1) и командами,
+// которые в режиме b 64 и так 64-битные (default64: push, pop — без REX.W).
+func (e *encoder) buildX(opcode []byte, size int, rm any, reg int, immBytes []byte, oreg *Reg, default64 bool) []byte {
 	out := append([]byte(nil), e.pre...)
 	var body []byte
-	asize := 0
+	asize, rex := 0, 0
+	var rip *big.Int
 	switch x := rm.(type) {
 	case *Mem:
-		asize, body = e.memEncode(reg, x)
+		asize, body, rex, rip = e.memEncode(reg&7, x)
 		if x.Seg != nil {
 			out = append(out, segPrefix[x.Seg.Name])
 		}
 	case *Reg:
-		body = []byte{byte(0xC0 | reg<<3 | x.Num)}
+		body = []byte{byte(0xC0 | (reg&7)<<3 | x.Num&7)}
+		if x.Num >= 8 {
+			rex |= 1
+		}
 	}
-	if (size == 16 || size == 32) && size != e.bits {
+	if reg >= 8 {
+		rex |= 4
+	}
+	if oreg != nil && oreg.Num >= 8 {
+		rex |= 1
+	}
+	if size == 64 && !default64 {
+		rex |= 8
+	}
+	if (size == 16 || size == 32) && size != e.osize {
 		out = append(out, 0x66)
 	}
 	if asize != 0 && asize != e.bits {
 		out = append(out, 0x67)
 	}
-	return cat(out, opcode, body, immBytes)
+	if b := e.rexByte(rex); b != 0 {
+		out = append(out, b)
+	}
+	code := cat(out, opcode, body, immBytes)
+	if rip != nil { // смещение считается от конца команды
+		pos := len(out) + len(opcode) + 1
+		disp := sub(rip, addInt(e.ctx.addr(), len(code)))
+		if e.ctx.final() && !inRange(disp, -(1<<31), 1<<31-1) {
+			fail(fmt.Sprintf("адрес %#x слишком далеко от команды для адресации относительно rip "+
+				"(используйте [abs адрес])", rip))
+		}
+		copy(code[pos:pos+4], pack(disp, 4))
+	}
+	return code
+}
+
+// rexByte — байт REX (0 — не нужен). Его требуют r8–r15, spl/bpl/sil/dil и 64-битные операнды.
+func (e *encoder) rexByte(rex int) byte {
+	need, high := rex != 0, false
+	for _, o := range e.ops {
+		if r, ok := o.(*Reg); ok && r.Size == 8 {
+			need = need || r.X64
+			high = high || r.High8
+		}
+	}
+	if !need {
+		return 0
+	}
+	if e.bits != 64 {
+		fail(e.mn + ": 64-битные операнды есть только в режиме b 64")
+	}
+	if high {
+		fail("ah, bh, ch и dh нельзя использовать в одной команде с r8–r15, spl, bpl, sil, dil " +
+			"или 64-битными операндами")
+	}
+	return byte(0x40 | rex)
+}
+
+// shortMoffs — можно ли mov al/ax/eax <-> [адрес] записать короткой формой без ModRM.
+func (e *encoder) shortMoffs(reg *Reg, m *Mem) bool {
+	return reg.Num == 0 && m.direct() && e.bits != 64
 }
 
 // moffs — mov al/ax/eax <-> [адрес]: короткая форма без ModRM.
@@ -587,6 +765,9 @@ func (e *encoder) relJump(target any, shortOp, nearOp []byte, hint string) []byt
 }
 
 func (e *encoder) farPtr(opcode byte, o *Far) []byte {
+	if e.bits == 64 {
+		fail(fmt.Sprintf("%s сегмент:смещение недоступен в режиме b 64 — используйте %s far [адрес]", e.mn, e.mn))
+	}
 	size := o.Size
 	if size == 0 {
 		size = e.bits
@@ -601,12 +782,22 @@ func (e *encoder) farPtr(opcode byte, o *Far) []byte {
 
 func (e *encoder) indirect(o any, nearN, farN int) []byte {
 	if m, ok := o.(*Mem); ok && m.Jump == "far" {
-		return e.build([]byte{0xff}, 0, o, farN, nil)
+		size := 0
+		if e.bits == 64 {
+			size = 64
+		}
+		return e.build([]byte{0xff}, size, o, farN, nil)
 	}
 	if isRM(o) {
 		size := opSizeOf(o)
 		if size == 0 {
 			size = e.bits
+		}
+		if e.bits == 64 {
+			if size != 64 {
+				e.bad()
+			}
+			return e.build([]byte{0xff}, 0, o, nearN, nil)
 		}
 		if size != 16 && size != 32 {
 			e.bad()
@@ -621,6 +812,18 @@ func (e *encoder) indirect(o any, nearN, farN int) []byte {
 
 func (e *encoder) encode(ops []any) []byte {
 	mn := e.mn
+	e.ops = ops
+	for _, r := range opRegs(ops) {
+		if r.X64 && e.bits != 64 {
+			fail(fmt.Sprintf("регистр %s есть только в режиме b 64", r.Name))
+		}
+	}
+	if e.bits == 64 && no64[mn] {
+		fail(fmt.Sprintf("команды %s нет в режиме b 64", mn))
+	}
+	if e.bits != 64 && only64[mn] {
+		fail(fmt.Sprintf("команда %s есть только в режиме b 64", mn))
+	}
 	if b, ok := simpleOps[mn]; ok {
 		e.nops(ops, 0)
 		return cat(e.pre, b)
@@ -678,6 +881,8 @@ func (e *encoder) encode(ops []any) []byte {
 		return e.movx(ops, []byte{0x0f, 0xb6}, []byte{0x0f, 0xb7})
 	case "movsx":
 		return e.movx(ops, []byte{0x0f, 0xbe}, []byte{0x0f, 0xbf})
+	case "movsxd":
+		return e.opMovsxd(ops)
 	case "push":
 		return e.opPush(ops)
 	case "pop":
@@ -709,7 +914,9 @@ func (e *encoder) encode(ops []any) []byte {
 	case "jcxz":
 		return e.loopish(ops, 0xE3, e.bits == 32)
 	case "jecxz":
-		return e.loopish(ops, 0xE3, e.bits == 16)
+		return e.loopish(ops, 0xE3, e.bits != 32)
+	case "jrcxz":
+		return e.loopish(ops, 0xE3, false)
 	case "ret":
 		return e.ret(ops, 0xC3, 0xC2)
 	case "retf":
@@ -741,9 +948,13 @@ func (e *encoder) opMov(ops []any) []byte {
 	}
 
 	// управляющие и отладочные регистры
+	need, example := 32, "eax"
+	if e.bits == 64 {
+		need, example = 64, "rax"
+	}
 	if r, ok := d.(*Reg); ok && (r.Kind == "cr" || r.Kind == "dr") {
-		if !(isGpr(s) && s.(*Reg).Size == 32) {
-			fail(fmt.Sprintf("mov %s - ...: источник должен быть 32-битным регистром (например eax)", r.Name))
+		if !(isGpr(s) && s.(*Reg).Size == need) {
+			fail(fmt.Sprintf("mov %s - ...: источник должен быть %d-битным регистром (например %s)", r.Name, need, example))
 		}
 		op := []byte{0x0f, 0x22}
 		if r.Kind == "dr" {
@@ -752,8 +963,8 @@ func (e *encoder) opMov(ops []any) []byte {
 		return e.build(op, 0, s, r.Num, nil)
 	}
 	if r, ok := s.(*Reg); ok && (r.Kind == "cr" || r.Kind == "dr") {
-		if !(isGpr(d) && d.(*Reg).Size == 32) {
-			fail(fmt.Sprintf("mov ... - %s: приёмник должен быть 32-битным регистром (например eax)", r.Name))
+		if !(isGpr(d) && d.(*Reg).Size == need) {
+			fail(fmt.Sprintf("mov ... - %s: приёмник должен быть %d-битным регистром (например %s)", r.Name, need, example))
 		}
 		op := []byte{0x0f, 0x20}
 		if r.Kind == "dr" {
@@ -780,7 +991,11 @@ func (e *encoder) opMov(ops []any) []byte {
 	}
 	if r, ok := s.(*Reg); ok && r.Kind == "seg" {
 		if isGpr(d) && d.(*Reg).Size != 8 {
-			return e.build([]byte{0x8c}, d.(*Reg).Size, d, r.Num, nil)
+			size := d.(*Reg).Size
+			if size == 64 {
+				size = 0
+			}
+			return e.build([]byte{0x8c}, size, d, r.Num, nil)
 		}
 		if m, ok := d.(*Mem); ok && (m.Size == 0 || m.Size == 16) {
 			return e.build([]byte{0x8c}, 0, d, r.Num, nil)
@@ -804,17 +1019,20 @@ func (e *encoder) opMov(ops []any) []byte {
 		}
 		if m, ok := s.(*Mem); ok {
 			e.checkMemSize(m, size)
-			if dr.Num == 0 && m.direct() {
+			if e.shortMoffs(dr, m) {
 				return e.moffs(byte(0xA0+w), size, m)
 			}
 			return e.build([]byte{byte(0x8A + w)}, size, s, dr.Num, nil)
 		}
-		if isImm(s) {
+		if si, ok := s.(*Imm); ok {
+			if size == 64 {
+				return e.movR64Imm(dr, si)
+			}
 			op := 0xB8
 			if w == 0 {
 				op = 0xB0
 			}
-			return e.build([]byte{byte(op + dr.Num)}, size, nil, 0, e.imm(s, size, true))
+			return e.buildX([]byte{byte(op + dr.Num&7)}, size, nil, 0, e.imm(s, size, true), dr, false)
 		}
 		e.bad()
 	}
@@ -827,7 +1045,7 @@ func (e *encoder) opMov(ops []any) []byte {
 				w = 0
 			}
 			e.checkMemSize(m, size)
-			if sr.Num == 0 && m.direct() {
+			if e.shortMoffs(sr, m) {
 				return e.moffs(byte(0xA2+w), size, m)
 			}
 			return e.build([]byte{byte(0x88 + w)}, size, d, sr.Num, nil)
@@ -838,7 +1056,7 @@ func (e *encoder) opMov(ops []any) []byte {
 			if size == 8 {
 				w = 0
 			}
-			return e.build([]byte{byte(0xC6 + w)}, size, d, 0, e.imm(s, size, true))
+			return e.build([]byte{byte(0xC6 + w)}, size, d, 0, e.immOp(s, size))
 		}
 		if isMem(s) {
 			fail("mov: нельзя переслать память в память — используйте регистр")
@@ -846,6 +1064,25 @@ func (e *encoder) opMov(ops []any) []byte {
 	}
 	e.bad()
 	return nil
+}
+
+// movR64Imm — mov r64 - число: как NASM — 5 байт (0..2³²), 7 байт (32 бита со знаком) или 10 байт.
+func (e *encoder) movR64Imm(d *Reg, s *Imm) []byte {
+	v := s.Value
+	need := 2
+	switch {
+	case !s.Known || (v.Sign() >= 0 && cmpInt(v, 1<<32) < 0):
+		need = 0
+	case fitsS32(v):
+		need = 1
+	}
+	switch e.ctx.level("imm", need) {
+	case 0:
+		return e.buildX([]byte{byte(0xB8 + d.Num&7)}, 32, nil, 0, e.imm(s, 32, false), d, false)
+	case 1:
+		return e.build([]byte{0xc7}, 64, d, 0, e.immOp(s, 64))
+	}
+	return e.buildX([]byte{byte(0xB8 + d.Num&7)}, 64, nil, 0, e.imm(s, 64, true), d, false)
 }
 
 func (e *encoder) a20(s any) []byte {
@@ -877,12 +1114,13 @@ func (e *encoder) opXchg(ops []any) []byte {
 		if dr.Size != sr.Size {
 			fail("xchg: размеры регистров не совпадают")
 		}
-		if dr.Size != 8 && (dr.Num == 0 || sr.Num == 0) {
+		nop := e.bits == 64 && dr.Size == 32 && dr.Num == 0 && sr.Num == 0 // 90 — это nop, а не xchg eax - eax
+		if dr.Size != 8 && (dr.Num == 0 || sr.Num == 0) && !nop {
 			other := dr
 			if dr.Num == 0 {
 				other = sr
 			}
-			return e.build([]byte{byte(0x90 + other.Num)}, dr.Size, nil, 0, nil)
+			return e.buildX([]byte{byte(0x90 + other.Num&7)}, dr.Size, nil, 0, nil, other, false)
 		}
 		op := byte(0x87)
 		if dr.Size == 8 {
@@ -938,11 +1176,24 @@ func (e *encoder) movx(ops []any, op8, op16 []byte) []byte {
 	if ss == 8 {
 		return e.build(op8, dr.Size, s, dr.Num, nil)
 	}
-	if ss == 16 && dr.Size == 32 {
+	if ss == 16 && (dr.Size == 32 || dr.Size == 64) {
 		return e.build(op16, dr.Size, s, dr.Num, nil)
+	}
+	if ss == 32 && dr.Size == 64 {
+		fail(e.mn + ": из 32 в 64 бита — movsxd (со знаком) или mov в 32-битный регистр (без знака: " +
+			"mov eax - ... обнуляет старшую половину rax)")
 	}
 	e.bad()
 	return nil
+}
+
+func (e *encoder) opMovsxd(ops []any) []byte {
+	e.nops(ops, 2)
+	d, s := ops[0], ops[1]
+	if !(isGpr(d) && d.(*Reg).Size == 64 && isRM(s) && (opSizeOf(s) == 0 || opSizeOf(s) == 32)) {
+		fail("movsxd: нужно movsxd 64-битный регистр - 32-битный регистр или dword [память]")
+	}
+	return e.build([]byte{0x63}, 64, s, d.(*Reg).Num, nil)
 }
 
 func (e *encoder) opPush(ops []any) []byte {
@@ -950,29 +1201,58 @@ func (e *encoder) opPush(ops []any) []byte {
 	switch o := ops[0].(type) {
 	case *Reg:
 		if o.Kind == "seg" {
+			e.checkSeg64(o)
 			return cat(e.pre, segPush[o.Name])
 		}
 		if o.Kind == "gpr" && o.Size != 8 {
-			return e.build([]byte{byte(0x50 + o.Num)}, o.Size, nil, 0, nil)
+			e.checkStackSize(o.Size)
+			return e.buildX([]byte{byte(0x50 + o.Num&7)}, o.Size, nil, 0, nil, o, true)
 		}
 		e.bad()
 	case *Imm:
-		size := e.bits
-		if o.Size == 16 || o.Size == 32 {
-			size = o.Size
+		var size int
+		if e.bits == 64 {
+			if o.Size == 32 {
+				fail("push dword недоступна в режиме b 64: число кладётся в стек как qword")
+			}
+			size = 64
+			if o.Size == 16 {
+				size = 16
+			}
+		} else {
+			size = e.bits
+			if o.Size == 16 || o.Size == 32 {
+				size = o.Size
+			}
 		}
 		if e.shortImm(o, size) {
-			return e.build([]byte{0x6a}, size, nil, 0, e.immS8(o, size))
+			return e.buildX([]byte{0x6a}, size, nil, 0, e.immS8(o, size), nil, true)
 		}
-		return e.build([]byte{0x68}, size, nil, 0, e.imm(o, size, true))
+		return e.buildX([]byte{0x68}, size, nil, 0, e.immOp(o, size), nil, true)
 	case *Mem:
-		if o.Size != 16 && o.Size != 32 {
+		if e.bits == 64 {
+			if o.Size != 16 && o.Size != 64 {
+				fail("push: в режиме b 64 укажите размер памяти: qword или word")
+			}
+		} else if o.Size != 16 && o.Size != 32 {
 			fail("push: укажите размер памяти: word или dword")
 		}
-		return e.build([]byte{0xff}, o.Size, o, 6, nil)
+		return e.buildX([]byte{0xff}, o.Size, o, 6, nil, nil, true)
 	}
 	e.bad()
 	return nil
+}
+
+func (e *encoder) checkSeg64(o *Reg) {
+	if e.bits == 64 && o.Name != "fs" && o.Name != "gs" {
+		fail(fmt.Sprintf("%s %s недоступна в режиме b 64 (можно только fs и gs)", e.mn, o.Name))
+	}
+}
+
+func (e *encoder) checkStackSize(size int) {
+	if e.bits == 64 && size == 32 {
+		fail(fmt.Sprintf("%s: в режиме b 64 в стек кладутся 64-битные регистры (%s rax) или 16-битные", e.mn, e.mn))
+	}
 }
 
 func (e *encoder) opPop(ops []any) []byte {
@@ -983,17 +1263,23 @@ func (e *encoder) opPop(ops []any) []byte {
 			if o.Name == "cs" {
 				fail("pop cs недопустим")
 			}
+			e.checkSeg64(o)
 			return cat(e.pre, segPop[o.Name])
 		}
 		if o.Kind == "gpr" && o.Size != 8 {
-			return e.build([]byte{byte(0x58 + o.Num)}, o.Size, nil, 0, nil)
+			e.checkStackSize(o.Size)
+			return e.buildX([]byte{byte(0x58 + o.Num&7)}, o.Size, nil, 0, nil, o, true)
 		}
 		e.bad()
 	case *Mem:
-		if o.Size != 16 && o.Size != 32 {
+		if e.bits == 64 {
+			if o.Size != 16 && o.Size != 64 {
+				fail("pop: в режиме b 64 укажите размер памяти: qword или word")
+			}
+		} else if o.Size != 16 && o.Size != 32 {
 			fail("pop: укажите размер памяти: word или dword")
 		}
-		return e.build([]byte{0x8f}, o.Size, o, 0, nil)
+		return e.buildX([]byte{0x8f}, o.Size, o, 0, nil, nil, true)
 	}
 	e.bad()
 	return nil
@@ -1016,9 +1302,9 @@ func (e *encoder) opALU(ops []any, n int) []byte {
 			return e.build([]byte{0x83}, size, d, n, e.immS8(si, size))
 		}
 		if isAcc(d) {
-			return e.build([]byte{byte(n*8 + 5)}, size, nil, 0, e.imm(s, size, true))
+			return e.build([]byte{byte(n*8 + 5)}, size, nil, 0, e.immOp(s, size))
 		}
-		return e.build([]byte{0x81}, size, d, n, e.imm(s, size, true))
+		return e.build([]byte{0x81}, size, d, n, e.immOp(s, size))
 	}
 	if isGpr(s) && isRM(d) {
 		size := e.opSize(d, s)
@@ -1056,9 +1342,9 @@ func (e *encoder) opTest(ops []any) []byte {
 			w = 0
 		}
 		if isAcc(d) {
-			return e.build([]byte{byte(0xA8 + w)}, size, nil, 0, e.imm(s, size, true))
+			return e.build([]byte{byte(0xA8 + w)}, size, nil, 0, e.immOp(s, size))
 		}
-		return e.build([]byte{byte(0xF6 + w)}, size, d, 0, e.imm(s, size, true))
+		return e.build([]byte{byte(0xF6 + w)}, size, d, 0, e.immOp(s, size))
 	}
 	if isGpr(d) && isMem(s) {
 		d, s = s, d
@@ -1082,7 +1368,7 @@ func (e *encoder) incDec(ops []any, n int) []byte {
 		e.bad()
 	}
 	size := e.opSize(o)
-	if isGpr(o) && size != 8 {
+	if isGpr(o) && size != 8 && e.bits != 64 { // в режиме b 64 байты 40–4F — это REX
 		return e.build([]byte{byte(0x40 + 8*n + o.(*Reg).Num)}, size, nil, 0, nil)
 	}
 	op := byte(0xff)
@@ -1130,7 +1416,7 @@ func (e *encoder) opImul(ops []any) []byte {
 	if e.shortImm(k, size) {
 		return e.build([]byte{0x6b}, size, s, dn, e.immS8(k, size))
 	}
-	return e.build([]byte{0x69}, size, s, dn, e.imm(k, size, true))
+	return e.build([]byte{0x69}, size, s, dn, e.immOp(k, size))
 }
 
 func (e *encoder) opShift(ops []any, n int) []byte {
@@ -1195,10 +1481,15 @@ func (e *encoder) bitScan(ops []any, opcode []byte) []byte {
 func (e *encoder) opBswap(ops []any) []byte {
 	e.nops(ops, 1)
 	o := ops[0]
-	if !(isGpr(o) && o.(*Reg).Size == 32) {
-		fail("bswap: нужен 32-битный регистр")
+	r, ok := o.(*Reg)
+	if !(ok && r.Kind == "gpr" && (r.Size == 32 || r.Size == 64)) {
+		msg := "bswap: нужен 32-битный регистр"
+		if e.bits == 64 {
+			msg += " или 64-битный"
+		}
+		fail(msg)
 	}
-	return e.build([]byte{0x0F, byte(0xC8 + o.(*Reg).Num)}, 32, nil, 0, nil)
+	return e.buildX([]byte{0x0F, byte(0xC8 + r.Num&7)}, r.Size, nil, 0, nil, r, false)
 }
 
 func (e *encoder) opSetCC(ops []any, c int) []byte {
@@ -1275,7 +1566,7 @@ func (e *encoder) ret(ops []any, op0, opn byte) []byte {
 func (e *encoder) opIn(ops []any) []byte {
 	e.nops(ops, 2)
 	d, s := ops[0], ops[1]
-	if !isAcc(d) {
+	if !isAcc(d) || d.(*Reg).Size == 64 {
 		fail("in: приёмник должен быть al, ax или eax")
 	}
 	dr := d.(*Reg)
@@ -1296,7 +1587,7 @@ func (e *encoder) opIn(ops []any) []byte {
 func (e *encoder) opOut(ops []any) []byte {
 	e.nops(ops, 2)
 	d, s := ops[0], ops[1]
-	if !isAcc(s) {
+	if !isAcc(s) || s.(*Reg).Size == 64 {
 		fail("out: источник должен быть al, ax или eax")
 	}
 	sr := s.(*Reg)

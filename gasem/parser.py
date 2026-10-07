@@ -14,14 +14,16 @@ SIZE_WORDS = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "b": 8, "w": 16, 
 JUMP_WORDS = {"short", "near", "far"}
 DIRECTIVES = {"og", "align", "incbin", "include", "do", "equ", "pool", "args"}
 BLOCK_WORDS = {"macro", "proc", "struct", "at", "local", "return"}
-RESERVED = set(x86.REGISTERS) | set(SIZE_WORDS) | JUMP_WORDS | {"a20", "s"} | DIRECTIVES | BLOCK_WORDS
+RESERVED = (set(x86.REGISTERS) | set(SIZE_WORDS) | JUMP_WORDS | {"a20", "s", "rel", "abs"} | DIRECTIVES
+            | BLOCK_WORDS)
 # слова, которые открывают блок, закрываемый end (until — для repeat)
 OPENERS = {"if", "while", "for", "repeat", "macro", "proc", "struct", "at"}
 MAX_MACRO_DEPTH = 32
 MAX_MACRO_LINES = 100_000      # всего строк, развёрнутых из макросов (защита от взрывного роста)
 # в какие регистры попадают аргументы call, если для подпрограммы нет args
 DEFAULT_ARGS = {16: ["ax", "bx", "cx", "dx", "si", "di"],
-                32: ["eax", "ebx", "ecx", "edx", "esi", "edi"]}
+                32: ["eax", "ebx", "ecx", "edx", "esi", "edi"],
+                64: ["rax", "rbx", "rcx", "rdx", "rsi", "rdi"]}
 
 # Приоритеты бинарных операторов (от низшего к высшему).
 BINARY_LEVELS = [("|",), ("^",), ("&",), ("<<", ">>"), ("+", "-"), ("*", "/", "%")]
@@ -195,6 +197,16 @@ class Struct:
         self.fields = []        # (имя, смещение, размер элемента, количество, структура или None)
         self.size = 0
         self.consts = []        # ("x", смещение), ("pos.x", смещение) ... — с вложенными полями
+
+
+def widen_move(r, a, loc):
+    """mov r - a; меньший регистр расширяется нулями (из 32 в 64 бита — mov в 32-битную часть)."""
+    if isinstance(a, N.RegOperand) and a.reg.kind == "gpr" and a.reg.size < r.size:
+        if a.reg.size == 32:
+            low = x86.REGISTERS[x86.FAMILY_NAMES[32][r.num]]
+            return N.InstrStmt([], "mov", [N.RegOperand(low), a], loc)
+        return N.InstrStmt([], "movzx", [N.RegOperand(r), a], loc)
+    return N.InstrStmt([], "mov", [N.RegOperand(r), a], loc)
 
 
 def split_seps(toks):
@@ -445,7 +457,7 @@ class Parser:
                 ts.error("после b ожидается режим (b 16 или b 32), либо данные (b: ...)")
             expr = self.parse_expr(ts)
             ts.expect_end()
-            if N.fold_const(expr) in (16, 32):
+            if N.fold_const(expr) in (16, 32, 64):
                 self.bits = N.fold_const(expr)
             return self._finish(N.BitsStmt(expr, loc), emit)
 
@@ -573,7 +585,7 @@ class Parser:
             return None
         if word == "return":
             blk = self.hl.proc_block(first)
-            acc = "eax" if blk.bits == 32 else "ax"
+            acc = x86.FAMILY_NAMES[blk.bits][0]
             if len(stmt) == 1 or (len(stmt) == 2 and stmt[1].is_id(acc)):   # return [eax] if … — один переход
                 self.hl.cond_jump(blk.exit, if_tok, cond, loc)
                 return None
@@ -704,14 +716,14 @@ class Parser:
         name_tok = groups[0][0]
         if name_tok.value.startswith("."):
             raise GasemError("имя процедуры не может начинаться с точки", None, name_tok.col)
-        params = [self.reg_word(g, "аргументы proc — регистры общего назначения", sizes=(8, 16, 32))
+        params = [self.reg_word(g, "аргументы proc — регистры общего назначения", sizes=(8, 16, 32, 64))
                   for g in groups[1:]]
         uses = []
         if uses_toks is not None:
             ugroups = split_seps(uses_toks)
             if not all(ugroups):
                 raise GasemError("после uses перечисляются регистры: uses eax - ebx", None, toks[idx].col)
-            uses = [self.reg_word(g, "в uses перечисляются 16- или 32-битные регистры", sizes=(16, 32))
+            uses = [self.reg_word(g, "в uses перечисляются 16-, 32- или 64-битные регистры", sizes=(16, 32, 64))
                     for g in ugroups]
         self.define_label(name_tok, loc)
         name = self.full_name(name_tok)
@@ -775,22 +787,18 @@ class Parser:
 
     def frame_reg(self):
         blk = next(b for b in self.hl.blocks if b.kind == "proc")
-        return x86.REGISTERS["ebp" if blk.bits == 32 else "bp"]
+        return x86.REGISTERS[{16: "bp", 32: "ebp", 64: "rbp"}[blk.bits]]
 
     def word_return(self, word, toks, loc):
         blk = self.hl.proc_block(word)
         if toks:
             op = self.parse_operand(toks, loc)
-            acc = x86.REGISTERS["eax" if blk.bits == 32 else "ax"]
+            acc = x86.REGISTERS[x86.FAMILY_NAMES[blk.bits][0]]
             if any(family(r) == 0 for r in blk.uses):
                 raise GasemError(f"return значение: {acc.name} восстанавливается из uses и затрёт результат",
                                  None, word.col)
-            if isinstance(op, N.RegOperand) and op.reg is acc:
-                pass
-            elif isinstance(op, N.RegOperand) and op.reg.kind == "gpr" and op.reg.size < acc.size:
-                self.hl.instr("movzx", [N.RegOperand(acc), op], loc)
-            else:
-                self.hl.instr("mov", [N.RegOperand(acc), op], loc)
+            if not (isinstance(op, N.RegOperand) and op.reg is acc):
+                self.emit(widen_move(acc, op, loc))
         self.hl.jump("jmp", blk.exit, loc)
 
     # ------------------------------------------------ struct
@@ -981,10 +989,7 @@ class Parser:
             raise GasemError("адрес вызова зависит от регистра, в который передаётся аргумент")
         out = []
         for r, a in ordered:
-            mn = "mov"
-            if isinstance(a, N.RegOperand) and a.reg.kind == "gpr" and a.reg.size < r.size:
-                mn = "movzx"
-            out.append(N.InstrStmt([], mn, [N.RegOperand(r), a], st.loc))
+            out.append(widen_move(r, a, st.loc))
         out.append(N.InstrStmt(st.prefixes, st.mnemonic, [target], st.loc))
         return out
 
@@ -1168,7 +1173,7 @@ class Parser:
         if N.has_reg(expr):
             r = N.first_reg(expr)
             if r.local:
-                acc = "eax" if r.reg.size == 32 else "ax"
+                acc = x86.FAMILY_NAMES[r.reg.size][0]
                 raise GasemError(f"'{r.local}' — локальная переменная (лежит в стеке): значение — [{r.local}], "
                                  f"адрес — lea {acc} - [{r.local}]", loc, r.col)
             msg = f"регистр {r.reg.name} нельзя использовать в выражении"
@@ -1185,6 +1190,11 @@ class Parser:
                 and t1 is not None and t1.is_op(":")):
             seg = x86.REGISTERS[t0.value.lower()]
             ts.pos += 2
+        mode = None
+        t0, t1 = ts.peek(), ts.peek(1)
+        if t0 is not None and t0.is_id("rel", "abs") and t1 is not None and not t1.is_op("]"):
+            mode = t0.value.lower()                 # [abs 0xB8000], [rel msg] — для режима b 64
+            ts.pos += 1
         if ts.peek() is not None and ts.peek().is_op("]"):
             ts.error("пустой адрес []")
         t0, t1 = ts.peek(), ts.peek(1)
@@ -1198,7 +1208,9 @@ class Parser:
             ts.error("ожидалась ']'", close)
         ts.next()
         base, index, scale, disp = self.split_address(expr, ts.loc, open_tok.col)
-        return N.MemOperand(size, seg, base, index, scale, disp)
+        mem = N.MemOperand(size, seg, base, index, scale, disp)
+        mem.mode = mode
+        return mem
 
     def split_address(self, node, loc, col):
         regs = []
@@ -1259,11 +1271,11 @@ class Parser:
                 base, index, scale = r2, r1, s1
             else:
                 base, index, scale = r1, r2, s2
-            if index.name == "esp":
-                if scale == 1 and base.name != "esp":
+            if index.name in ("esp", "rsp"):
+                if scale == 1 and base.name not in ("esp", "rsp"):
                     base, index = index, base
                 else:
-                    fail("esp нельзя использовать как индексный регистр", n2)
+                    fail(f"{index.name} нельзя использовать как индексный регистр", n2)
         if index is not None and index.size == 16 and scale != 1:
             fail("масштаб (*2, *4, *8) недоступен в 16-битной адресации")
 

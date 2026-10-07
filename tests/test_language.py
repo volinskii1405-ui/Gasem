@@ -42,7 +42,7 @@ class DirectivesTest(unittest.TestCase, ErrorsMixin):
         self.assertEqual(hexs("b 16\ninc ax\nb 32\ninc ax"), "40 66 40")
 
     def test_bad_bits(self):
-        self.assertError("b 64", "b 16 и b 32")
+        self.assertError("b 8", "b 16, b 32 и b 64")
 
     def test_og_twice(self):
         self.assertError("og 0\nog 1", "только один раз")

@@ -18,7 +18,7 @@ var directives = map[string]bool{"og": true, "align": true, "incbin": true, "inc
 
 // Reserved — слова, которые нельзя использовать как имена.
 var Reserved = func() map[string]bool {
-	m := map[string]bool{"a20": true, "s": true}
+	m := map[string]bool{"a20": true, "s": true, "rel": true, "abs": true}
 	for k := range blockWords {
 		m[k] = true
 	}
@@ -39,7 +39,8 @@ var Reserved = func() map[string]bool {
 
 // в какие регистры попадают аргументы call, если для подпрограммы нет args
 var defaultArgs = map[int][]string{16: {"ax", "bx", "cx", "dx", "si", "di"},
-	32: {"eax", "ebx", "ecx", "edx", "esi", "edi"}}
+	32: {"eax", "ebx", "ecx", "edx", "esi", "edi"},
+	64: {"rax", "rbx", "rcx", "rdx", "rsi", "rdi"}}
 
 // Приоритеты бинарных операторов (от низшего к высшему).
 var binaryLevels = [][]string{{"|"}, {"^"}, {"&"}, {"<<", ">>"}, {"+", "-"}, {"*", "/", "%"}}
@@ -600,7 +601,7 @@ func (p *Parser) parseStatement(ts *tokenStream, loc *SourceLoc, baseDir string,
 		}
 		expr := p.parseExpr(ts, "")
 		ts.expectEnd("строки")
-		if v := foldConst(expr); v != nil && (eqInt(v, 16) || eqInt(v, 32)) {
+		if v := foldConst(expr); v != nil && (eqInt(v, 16) || eqInt(v, 32) || eqInt(v, 64)) {
 			p.bits = small(v)
 		}
 		return p.finishStmt(&BitsStmt{Expr: expr, Loc: loc}, emit)
@@ -772,7 +773,7 @@ func (p *Parser) parsePostfixIf(ts *tokenStream, idx int, loc *SourceLoc, baseDi
 	}
 	if word == "return" {
 		blk := p.hl.procBlock(first)
-		acc := accFor(blk.bits).Name
+		acc := FamilyNames[blk.bits][0]
 		if len(stmt) == 1 || (len(stmt) == 2 && stmt[1].IsID(acc)) { // return [eax] if … — один переход
 			p.hl.condJump(blk.exit, ifTok, cond, loc, true)
 			return
@@ -958,14 +959,22 @@ func (p *Parser) expandCall(st *CallStmt) []Stmt {
 	}
 	var out []Stmt
 	for _, m := range ordered {
-		mn := "mov"
-		if ro, ok := m.a.(*RegOperand); ok && ro.Reg.Kind == "gpr" && ro.Reg.Size < m.r.Size {
-			mn = "movzx"
-		}
-		out = append(out, newInstr(nil, mn, []Operand{&RegOperand{m.r}, m.a}, st.Loc, ""))
+		out = append(out, widenMove(m.r, m.a, st.Loc))
 	}
 	out = append(out, newInstr(st.Prefixes, st.Mnemonic, []Operand{target}, st.Loc, ""))
 	return out
+}
+
+// widenMove — mov r - a; меньший регистр расширяется нулями (из 32 в 64 бита — mov в 32-битную часть).
+func widenMove(r *Reg, a Operand, loc *SourceLoc) *InstrStmt {
+	if ro, ok := a.(*RegOperand); ok && ro.Reg.Kind == "gpr" && ro.Reg.Size < r.Size {
+		if ro.Reg.Size == 32 {
+			low := Registers[FamilyNames[32][r.Num]]
+			return newInstr(nil, "mov", []Operand{&RegOperand{low}, a}, loc, "")
+		}
+		return newInstr(nil, "movzx", []Operand{&RegOperand{r}, a}, loc, "")
+	}
+	return newInstr(nil, "mov", []Operand{&RegOperand{r}, a}, loc, "")
 }
 
 // pyStrName — имя подпрограммы так, как его напечатал бы Python (None, если имени нет).
@@ -1202,10 +1211,7 @@ func (p *Parser) parseOperand(toks []*Token, loc *SourceLoc) Operand {
 	ts.expectEnd("операнда")
 	if r := firstReg(expr); r != nil {
 		if r.Local != "" {
-			acc := "ax"
-			if r.Reg.Size == 32 {
-				acc = "eax"
-			}
+			acc := FamilyNames[r.Reg.Size][0]
 			failAt(fmt.Sprintf("'%s' — локальная переменная (лежит в стеке): значение — [%s], адрес — lea %s - [%s]",
 				r.Local, r.Local, acc, r.Local), loc, r.C)
 		}
@@ -1235,6 +1241,11 @@ func (p *Parser) parseMem(ts *tokenStream, size int) *MemOperand {
 			}
 		}
 	}
+	mode := ""
+	if t0, t1 := ts.peek(0), ts.peek(1); t0 != nil && t0.IsID("rel", "abs") && t1 != nil && !t1.IsOp("]") {
+		mode = lower(t0.Value) // [abs 0xB8000], [rel msg] — для режима b 64
+		ts.pos++
+	}
 	if ts.peek(0) != nil && ts.peek(0).IsOp("]") {
 		ts.error("пустой адрес []")
 	}
@@ -1250,7 +1261,7 @@ func (p *Parser) parseMem(ts *tokenStream, size int) *MemOperand {
 	}
 	ts.next()
 	base, index, scale, disp := p.splitAddress(expr, ts.loc, openTok.Col)
-	return &MemOperand{Size: size, Seg: seg, Base: base, Index: index, Scale: scale, Disp: disp}
+	return &MemOperand{Size: size, Seg: seg, Base: base, Index: index, Scale: scale, Disp: disp, Mode: mode}
 }
 
 type addrReg struct {
@@ -1352,11 +1363,11 @@ func (p *Parser) splitAddress(node Expr, loc *SourceLoc, col int) (*Reg, *Reg, i
 		} else {
 			base, index, scale = r1.reg, r2.reg, r2.scale
 		}
-		if index.Name == "esp" {
-			if scale == 1 && base.Name != "esp" {
+		if index.Name == "esp" || index.Name == "rsp" {
+			if scale == 1 && base.Name != "esp" && base.Name != "rsp" {
 				base, index = index, base
 			} else {
-				failNode("esp нельзя использовать как индексный регистр", r2.node)
+				failNode(fmt.Sprintf("%s нельзя использовать как индексный регистр", index.Name), r2.node)
 			}
 		}
 	}

@@ -157,6 +157,7 @@ type MemOperand struct {
 	Scale int
 	Disp  Expr   // nil — нет смещения
 	Jump  string // "far" для jmp far [..]
+	Mode  string // "rel" / "abs" — способ адресации в режиме b 64
 }
 
 type ImmOperand struct {

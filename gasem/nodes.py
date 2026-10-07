@@ -153,6 +153,7 @@ class MemOperand:
         self.scale = scale
         self.disp = disp     # Expr или None
         self.jump = jump     # 'far' для jmp far [..]
+        self.mode = None     # 'rel' / 'abs' — способ адресации в режиме b 64
 
 
 class ImmOperand:

@@ -17,7 +17,7 @@ from gasem import compile_source
 NASM = shutil.which("nasm")
 
 # Строка Gasem → строка NASM (чисто синтаксическая замена).
-_ALIASES = {"nxtb": "lodsb", "nxtw": "lodsw", "nxtd": "lodsd", "chk": "test"}
+_ALIASES = {"nxtb": "lodsb", "nxtw": "lodsw", "nxtd": "lodsd", "nxtq": "lodsq", "chk": "test"}
 
 
 def to_nasm(line):
@@ -510,13 +510,138 @@ cmp dword [ebx+lfar-lback] - -2
 """.strip().splitlines()
 
 
+LINES_64 = """
+mov rax - 1
+mov rax - -1
+mov rax - 0x80000000
+mov rax - 0x123456789
+mov rax - 0xFFFFFFFF80000000
+mov eax - 1
+mov r8 - 5
+mov r8d - 5
+mov r15w - 7
+mov r9b - 1
+mov spl - 1
+mov sil - al
+mov qword [rbx] - 1
+mov qword [rsp] - -1
+mov [rbx] - r9
+mov r11 - [rbp]
+mov byte [r8] - 1
+mov ax - [r8+4]
+mov eax - [rsi+rdi]
+mov eax - [r15+rcx*8+0x100]
+mov al - [lvar]
+mov eax - [lvar]
+mov [lvar] - eax
+mov rax - [lvar+8]
+mov eax - [lvar-lback]
+mov eax - [abs 0x1234]
+mov eax - [0x1234]
+mov rax - [fs:0x10]
+mov ds - ax
+mov ds - rax
+mov rax - ds
+mov ax - ds
+mov rax - cr0
+mov cr3 - rax
+mov cr8 - rax
+push rax
+push r12
+push word 5
+push 1
+push 0x1000
+push qword [rax]
+pop rbx
+pop r13
+pop qword [rbx]
+push fs
+pop gs
+inc eax
+inc r10
+dec qword [rax]
+add rax - 5
+add rax - 0x1000
+add rax - 0x7fffffff
+and rax - -2
+sub rsp - 8
+xor r15d - r15d
+cmp qword [rbx+lfar-lback] - -2
+lea rax - [lvar]
+lea rax - [rsp+8]
+lea rax - [r13]
+lea rax - [r12+r13*2]
+lea eax - [ebx+4]
+lea r8 - [lfwd]
+xchg eax - eax
+xchg rax - rbx
+xchg r8d - eax
+xchg rcx - [rdx]
+movzx rax - byte [rbx]
+movzx eax - r9b
+movzx r10 - word [rax]
+movsx rax - cx
+movsxd rax - dword [rbx]
+movsxd rax - ecx
+cdqe
+cqo
+iretq
+iret
+syscall
+sysret
+swapgs
+pushfq
+popfq
+lodsq
+stosq
+movsq
+rep stosq
+jmp rax
+jmp r11
+call [rbx]
+jmp far [rax]
+call lfar
+jmp lfar
+jz lfar
+jnz lback
+jrcxz lfwd
+jecxz lfwd
+loop lback
+shl r9 - 3
+sar r14 - cl
+rol rax - 1
+test r10b - 1
+test rax - 0x100
+sete r9b
+cmovz rax - r8
+bt rax - 63
+not r12
+neg qword [rax]
+mul r13
+div rcx
+idiv qword [rbx]
+imul rax - rbx - 1000
+imul r8 - [rax]
+bswap r9
+bswap eax
+lgdt [rax]
+in al - dx
+out dx - eax
+int 0x80
+ret
+leave
+hlt
+""".strip().splitlines()
+
+
 def gasem_program(line, bits):
     return (f"og 0x7C00\nb {bits}\nlback:\n{line}\nlfwd:\n&& 300 nop\n"
             f"lfar:\nlvar w: 0\n")
 
 
 def nasm_program(line, bits):
-    return (f"org 0x7C00\nbits {bits}\nlback:\n{to_nasm(line)}\nlfwd:\ntimes 300 nop\n"
+    rel = "default rel\n" if bits == 64 else ""
+    return (f"org 0x7C00\nbits {bits}\n{rel}lback:\n{to_nasm(line)}\nlfwd:\ntimes 300 nop\n"
             f"lfar:\nlvar dw 0\n")
 
 
@@ -548,6 +673,9 @@ class NasmDifferentialTest(unittest.TestCase):
 
     def test_32bit(self):
         self.check(LINES_32, 32)
+
+    def test_64bit(self):
+        self.check(LINES_64, 64)
 
     def test_hello_bootloader(self):
         here = os.path.dirname(__file__)

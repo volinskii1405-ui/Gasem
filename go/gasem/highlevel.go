@@ -237,10 +237,8 @@ func (h *highLevel) procBlock(wordTok *Token) *block {
 }
 
 func frameRegs(blk *block) (*Reg, *Reg) {
-	if blk.bits == 32 {
-		return Registers["ebp"], Registers["esp"]
-	}
-	return Registers["bp"], Registers["sp"]
+	names := FamilyNames[blk.bits]
+	return Registers[names[5]], Registers[names[4]] // bp/ebp/rbp, sp/esp/rsp
 }
 
 // prologue — начало тела proc: кадр для локальных переменных и сохранение регистров uses.
