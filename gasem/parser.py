@@ -4,15 +4,19 @@ import os
 
 from . import nodes as N
 from . import x86
-from .errors import GasemError, SourceLoc
-from .highlevel import CONTROL_WORDS, HighLevel
+from . import hints
+from .errors import GasemError, GasemWarning, SourceLoc
+from .highlevel import CONTROL_WORDS, HighLevel, family
 from .lexer import Token, tokenize, NUM, STR, ID, OP, SEP
 
-DATA_UNITS = {"b": 1, "w": 2, "d": 4, "q": 8}
+DATA_UNITS = {"b": 1, "w": 2, "d": 4, "q": 8, "s": 1}   # s: — строка с нулём в конце
 SIZE_WORDS = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "b": 8, "w": 16, "d": 32, "q": 64}
 JUMP_WORDS = {"short", "near", "far"}
-DIRECTIVES = {"og", "align", "incbin", "include", "do", "equ"}
-RESERVED = set(x86.REGISTERS) | set(SIZE_WORDS) | JUMP_WORDS | {"a20"} | DIRECTIVES
+DIRECTIVES = {"og", "align", "incbin", "include", "do", "equ", "pool", "args"}
+RESERVED = set(x86.REGISTERS) | set(SIZE_WORDS) | JUMP_WORDS | {"a20", "s"} | DIRECTIVES
+# в какие регистры попадают аргументы call, если для подпрограммы нет args
+DEFAULT_ARGS = {16: ["ax", "bx", "cx", "dx", "si", "di"],
+                32: ["eax", "ebx", "ecx", "edx", "esi", "edi"]}
 
 # Приоритеты бинарных операторов (от низшего к высшему).
 BINARY_LEVELS = [("|",), ("^",), ("&",), ("<<", ">>"), ("+", "-"), ("*", "/", "%")]
@@ -71,6 +75,33 @@ def minus_seps(toks):
     return [Token(OP, "-", t.col, t.space, "-") if t.kind == SEP else t for t in toks]
 
 
+def string_data(entries, loc):
+    """Метки и данные строк: (метка, bytes) → @strN: s: "..." """
+    out = []
+    for label, value in entries:
+        out.append(N.LabelStmt(label, loc))
+        out.append(N.DataStmt(1, "list", None, [N.Str(value), N.Num(0)], loc, "s"))
+    return out
+
+
+def reads(op):
+    """Какие регистры (семейства) читает операнд."""
+    if isinstance(op, N.RegOperand) and op.reg.kind == "gpr":
+        return {family(op.reg)}
+    if isinstance(op, N.MemOperand):
+        return {family(r) for r in (op.base, op.index) if r is not None}
+    return set()
+
+
+def check_string_operands(ops, loc, col):
+    """'a' — символ, "a" — адрес строки. Ловим путаницу с байтовым операндом."""
+    if any(isinstance(o, N.ImmOperand) and o.from_string for o in ops) and any(
+            (isinstance(o, N.RegOperand) and o.reg.size == 8)
+            or (isinstance(o, N.MemOperand) and o.size == 8) for o in ops):
+        raise GasemError("строка в двойных кавычках — это адрес строки; "
+                         "символ записывается в одинарных кавычках: 'a'", loc, col)
+
+
 def split_seps(toks):
     groups = [[]]
     for t in toks:
@@ -95,6 +126,16 @@ class Parser:
         self.bits = 16            # текущий режим (b 16 / b 32) — нужен для let
         self.current_loc = None
         self.hl = HighLevel(self)  # if/while/for/let
+        self.call_args = {}       # подпрограмма -> регистры аргументов (args)
+        self.pending_strings = {} # строки из команд после последнего pool: bytes -> метка
+        self.string_first_use = {}  # метка строки -> первый оператор, где она нужна
+        self.strings_waiting = [] # строки текущей строки, ещё не привязанные к оператору
+        self.string_counter = 0
+        self.referenced = set()   # имена, на которые есть ссылки
+        self.defined = []         # метки программы: (имя, место, столбец)
+        self.first_label = None   # точка входа — о ней не предупреждаем
+        self.warnings = []
+        self.finished = False
 
     # ------------------------------------------------ файлы
 
@@ -125,6 +166,7 @@ class Parser:
             loc = SourceLoc(filename, lineno, line)
             self.lines.append(loc)
             self.current_loc = loc
+            self.strings_waiting = []
             try:
                 toks = tokenize(line, loc)
                 if toks:
@@ -158,6 +200,9 @@ class Parser:
         st = N.LabelStmt(name, loc, tok.col)
         self.statements.append(st)
         self.pending_labels.append(name)
+        self.defined.append((name, loc, tok.col))
+        if self.first_label is None:
+            self.first_label = name
         return st
 
     def emit(self, st):
@@ -165,6 +210,9 @@ class Parser:
             for name in self.pending_labels:
                 self.var_defs[name] = st
         self.pending_labels = []
+        for label in self.strings_waiting:
+            self.string_first_use.setdefault(label, st)
+        self.strings_waiting = []
         self.statements.append(st)
 
     # ------------------------------------------------ строки
@@ -204,6 +252,11 @@ class Parser:
         """Разобрать один оператор. emit=False — вернуть его (для &&)."""
         t = ts.peek()
 
+        if emit and not t.is_op("&&"):   # условие в конце строки: ret if carry
+            idx = next((j for j in range(ts.pos + 1, len(ts.toks)) if ts.toks[j].is_id("if")), None)
+            if idx is not None:
+                return self.parse_postfix_if(ts, idx, loc, base_dir)
+
         if t.is_op("&&"):
             ts.next()
             if ts.at_end():
@@ -213,6 +266,8 @@ class Parser:
                 ts.error("после числа повторений ожидается команда или данные: && N b: 0")
             if ts.peek().kind == SEP:
                 ts.error(SEP_HINT)
+            if not ts.peek().is_id("if") and any(x.is_id("if") for x in ts.toks[ts.pos:]):
+                ts.error("условие в конце строки нельзя сочетать с &&")
             body = self.parse_statement(ts, loc, base_dir, emit=False)
             if body is None:
                 ts.error("&& повторяет одну команду или директиву данных")
@@ -312,6 +367,24 @@ class Parser:
         if word == "do":
             return self._finish(self.parse_do(ts, loc), emit)
 
+        if word == "pool":   # сюда кладутся строки из команд выше
+            if not emit:
+                ts.error("pool нельзя повторять через &&")
+            ts.next()
+            ts.expect_end()
+            st = N.PoolStmt(loc)
+            st.entries = [(label, value) for value, label in self.pending_strings.items()]
+            self.pending_strings = {}
+            self.emit(st)
+            return None
+
+        if word == "args":   # args puts - esi
+            if not emit:
+                ts.error("args нельзя повторять через &&")
+            ts.next()
+            self.parse_args(ts, loc)
+            return None
+
         # префиксы: rep, lock, сегментные
         prefixes = []
         while t is not None and t.kind == ID:
@@ -331,15 +404,153 @@ class Parser:
         mn = x86.canonical(t.value)
         if mn is None:
             nxt = ts.peek(1)
-            hint = ""
-            if nxt is None and t.value.lower() not in RESERVED:
+            hint = hints.suggest_command(t.value)
+            if hint:
+                pass
+            elif nxt is None and t.value.lower() not in RESERVED:
                 hint = f" (если это метка — добавьте двоеточие: {t.value}:)"
             elif nxt is not None and nxt.is_op("-") and not nxt.space:
                 hint = " (разделитель операндов — ' - ' с пробелами)"
             ts.error(f"неизвестная команда '{t.value}'{hint}", t)
         ts.next()
         operands = self.parse_operands(ts.rest(), loc, ts)
+        check_string_operands(operands, loc, t.col)
+        if mn in ("push", "pop") and len(operands) > 1:
+            # push eax - ebx - ecx; pop снимает в обратном порядке: pop eax - ebx - ecx
+            if not emit:
+                ts.error("&& повторяет одну команду — список в push/pop здесь нельзя", t)
+            for op in (operands if mn == "push" else operands[::-1]):
+                self.emit(N.InstrStmt(prefixes, mn, [op], loc, t.value))
+            return None
+        if mn in ("call", "jmp") and len(operands) > 1:
+            if not emit:
+                ts.error("вызов с аргументами нельзя повторять через &&", t)
+            st = N.CallStmt(mn, prefixes, operands[0], operands[1:], self.bits, loc)
+            self.emit(st)
+            return st
         return self._finish(N.InstrStmt(prefixes, mn, operands, loc, t.value), emit)
+
+    def parse_postfix_if(self, ts, idx, loc, base_dir):
+        """команда if условие — выполнить команду, только если условие истинно."""
+        stmt, if_tok, cond = ts.toks[ts.pos:idx], ts.toks[idx], ts.toks[idx + 1:]
+        if not cond:
+            raise GasemError("после if ожидается условие: ret if carry", loc, if_tok.col)
+        first = stmt[0]
+        word = first.value.lower() if first.kind == ID else ""
+        if word in ("break", "continue") and len(stmt) == 1:
+            self.hl.loop_jump(word, first, if_tok, cond, loc)
+            return None
+        if (word in CONTROL_WORDS and word != "let") or first.is_op("&&"):
+            raise GasemError(f"'{first.text}' нельзя дополнить условием в конце строки", loc, first.col)
+        if x86.canonical(word) == "jmp" and len(stmt) > 1 and not any(x.kind == SEP for x in stmt):
+            op = self.parse_operand(stmt[1:], loc)
+            if isinstance(op, N.ImmOperand) and isinstance(op.expr, N.Sym) and op.jump != "far":
+                self.hl.cond_jump(op.expr.name, if_tok, cond, loc)     # один условный переход
+                return None
+        skip = self.hl.new_label("skip")
+        self.hl.cond_jump(skip, if_tok, cond, loc, value=False)
+        self.parse_statement(TokenStream(stmt, loc), loc, base_dir, emit=True)
+        self.hl.label(skip, loc)
+        return None
+
+    def parse_args(self, ts, loc):
+        groups = split_seps(ts.rest())
+        fmt = "формат: args подпрограмма - регистр - регистр ... (например: args puts - esi)"
+        if len(groups) < 2 or not all(groups) or len(groups[0]) != 1 or groups[0][0].kind != ID:
+            raise GasemError(fmt, loc)
+        name = self.full_name(groups[0][0])
+        regs = []
+        for g in groups[1:]:
+            reg = x86.REGISTERS.get(g[0].value.lower()) if len(g) == 1 and g[0].kind == ID else None
+            if reg is None or reg.kind != "gpr":
+                raise GasemError("в args перечисляются регистры общего назначения", loc, g[0].col)
+            regs.append(reg)
+        if name in self.call_args:
+            raise GasemError(f"аргументы '{name}' уже объявлены", loc, groups[0][0].col)
+        self.call_args[name] = regs
+
+    def intern_string(self, value):
+        """Строка из команды → метка. Одинаковые строки хранятся один раз."""
+        label = self.pending_strings.get(value)
+        if label is None:
+            self.string_counter += 1
+            label = f"@str{self.string_counter}"
+            self.pending_strings[value] = label
+        if label not in self.string_first_use:
+            self.strings_waiting.append(label)
+        return label
+
+    # ------------------------------------------------ после разбора
+
+    def finish(self):
+        """Разместить строки, развернуть вызовы с аргументами, собрать предупреждения."""
+        if self.finished:
+            return
+        self.finished = True
+        inline = {}                       # строки без pool — прямо в код с обходом
+        for value, label in self.pending_strings.items():
+            st = self.string_first_use.get(label)
+            if st is not None:
+                inline.setdefault(id(st), []).append((label, value))
+        out = []
+        for st in self.statements:
+            entries = inline.get(id(st))
+            if entries:
+                over = entries[0][0] + ".over"
+                out.append(N.InstrStmt([], "jmp", [N.ImmOperand(N.Sym(over))], st.loc))
+                out.extend(string_data(entries, st.loc))
+                out.append(N.LabelStmt(over, st.loc))
+            if isinstance(st, N.PoolStmt):
+                out.extend(string_data(st.entries, st.loc))
+            elif isinstance(st, N.CallStmt):
+                try:
+                    out.extend(self.expand_call(st))
+                except GasemError as e:
+                    if e.loc is None:
+                        e.loc = st.loc
+                    self.errors.append(e)
+            else:
+                out.append(st)
+        self.statements = out
+        for name, loc, col in self.defined:
+            if not name.startswith("@") and name != self.first_label and name not in self.referenced:
+                self.warnings.append(GasemWarning(f"метка '{name}' нигде не используется", loc, col))
+
+    def expand_call(self, st):
+        """call f - a - b → mov рег1 - a / mov рег2 - b / call f"""
+        target = st.target
+        name = target.expr.name if isinstance(target, N.ImmOperand) and isinstance(target.expr, N.Sym) else None
+        if name in self.call_args:
+            regs = self.call_args[name]
+        else:
+            defaults = DEFAULT_ARGS[st.bits]
+            if len(st.args) > len(defaults):
+                raise GasemError(f"слишком много аргументов (больше {len(defaults)})")
+            regs = [x86.REGISTERS[r] for r in defaults[:len(st.args)]]
+        if len(regs) != len(st.args):
+            names = " - ".join(r.name for r in regs)
+            raise GasemError(f"{name} принимает {len(regs)} аргумент(а) ({names}), а передано {len(st.args)}")
+        moves = [(r, a) for r, a in zip(regs, st.args)
+                 if not (isinstance(a, N.RegOperand) and a.reg is r)]
+        ordered = []
+        while moves:            # сначала те, чей регистр больше никому не нужен
+            for i, (r, a) in enumerate(moves):
+                if all(family(r) not in reads(a2) for j, (_, a2) in enumerate(moves) if j != i):
+                    ordered.append(moves.pop(i))
+                    break
+            else:
+                raise GasemError("аргументы зависят друг от друга по кругу (например, call f - ebx - eax "
+                                 "при args f - eax - ebx) — передайте их через другие регистры")
+        if {family(r) for r, _ in ordered} & reads(target):
+            raise GasemError("адрес вызова зависит от регистра, в который передаётся аргумент")
+        out = []
+        for r, a in ordered:
+            mn = "mov"
+            if isinstance(a, N.RegOperand) and a.reg.kind == "gpr" and a.reg.size < r.size:
+                mn = "movzx"
+            out.append(N.InstrStmt([], mn, [N.RegOperand(r), a], st.loc))
+        out.append(N.InstrStmt(st.prefixes, st.mnemonic, [target], st.loc))
+        return out
 
     def _finish(self, st, emit):
         if emit:
@@ -366,6 +577,11 @@ class Parser:
         name = ut.value.lower()
         unit = DATA_UNITS[name]
         kind_tok = ts.next()
+        if name == "s":
+            if kind_tok.value != ":":
+                ts.error("s: — строка с нулём в конце; для N нулевых байт используйте b-N", kind_tok)
+            items = self.parse_items(ts.rest(), loc) + [N.Num(0)]
+            return N.DataStmt(1, "list", None, items, loc, "s")
         if kind_tok.value == ":":
             items = self.parse_items(ts.rest(), loc)
             return N.DataStmt(unit, "list", None, items, loc, name)
@@ -468,6 +684,11 @@ class Parser:
         t = ts.peek()
         if t is None:
             ts.error("ожидался операнд")
+
+        if t.kind == STR and t.quote == '"' and ts.peek(1) is None:
+            # "строка" в команде — адрес строки с нулём в конце (её кладёт компилятор)
+            label = self.intern_string(t.value)
+            return N.ImmOperand(N.Sym(label, t.col), size, jump, from_string=True)
 
         if t.is_id("a20") and ts.peek(1) is None:
             return N.A20Operand()
@@ -673,7 +894,9 @@ class Parser:
             if c is None or not c.is_op("]"):
                 ts.error("в do внутри [ ] пишется только имя переменной: [msg]", c)
             ts.next()
-            return N.Var(self.full_name(nt), t.col)
+            name = self.full_name(nt)
+            self.referenced.add(name)
+            return N.Var(name, t.col)
         if mode == "let" and (t.is_op("[") or (t.kind == ID and t.value.lower() in SIZE_WORDS
                                                 and ts.peek() is not None and ts.peek().is_op("["))):
             size = None
@@ -688,7 +911,9 @@ class Parser:
                 return N.RegNode(x86.REGISTERS[low], t.col)
             if low in RESERVED:
                 ts.error(f"'{t.value}' нельзя использовать в выражении", t)
-            return N.Sym(self.full_name(t), t.col)
+            name = self.full_name(t)
+            self.referenced.add(name)
+            return N.Sym(name, t.col)
         if t.is_op(","):
             ts.error("операнды разделяются ' - ' (дефис с пробелами), а не запятой", t)
         ts.error(f"неожиданное '{t.text}' в выражении", t)

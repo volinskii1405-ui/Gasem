@@ -6,6 +6,7 @@
 "Hello" + 1 = "Hello1".
 """
 
+from . import hints
 from . import nodes as N
 from .errors import GasemError
 
@@ -43,7 +44,8 @@ class Evaluator:
             value = self.asm.lookup(node.name)
             if value is None:
                 if self.asm.final:
-                    self.error(f"неизвестное имя '{node.name}'", node)
+                    hint = hints.suggest_name(node.name, set(self.asm.cur) | set(self.asm.prev))
+                    self.error(f"неизвестное имя '{node.name}'{hint}", node)
                 self.known = False
                 return 0
             return value

@@ -161,6 +161,18 @@ class HighLevel:
                 self.jump("jmp", blk.top, loc)
                 self.label(blk.end, loc)
 
+    def cond_jump(self, target, word_tok, toks, loc, value=True):
+        """Перейти на target, если условие из toks равно value."""
+        signed, cond = self.condition(word_tok, toks)
+        self.jump_if(cond, value, target, signed, loc)
+
+    def loop_jump(self, word, word_tok, if_tok, toks, loc):
+        """break if ... / continue if ... — один условный переход."""
+        loop = next((b for b in reversed(self.blocks) if b.kind in LOOPS), None)
+        if loop is None:
+            _error(f"{word} вне цикла", word_tok)
+        self.cond_jump(loop.end if word == "break" else loop.cont, if_tok, toks, loc)
+
     def push(self, kind, loc):
         blk = Block(kind, loc)
         self.blocks.append(blk)
@@ -281,6 +293,11 @@ class HighLevel:
             left, right, rel = right, left, MIRROR[rel]
         if isinstance(left, N.ImmOperand):
             raise GasemError("сравнивать два числа бессмысленно — слева должен быть регистр или память")
+        if isinstance(right, N.ImmOperand) and right.from_string and (
+                (isinstance(left, N.RegOperand) and left.reg.size == 8)
+                or (isinstance(left, N.MemOperand) and left.size == 8)):
+            raise GasemError("строка в двойных кавычках — это адрес строки; "
+                             "символ записывается в одинарных кавычках: 'a'")
         if not isinstance(left, (N.RegOperand, N.MemOperand)) or isinstance(right, (N.FarOperand, N.A20Operand)):
             raise GasemError("в условии можно сравнивать регистры, память и числа")
         if (isinstance(left, N.RegOperand) and left.reg.kind == "gpr"
@@ -381,8 +398,12 @@ _LOW8_ORDER = [3, 1, 2, 0]                # регистры, у которых 
 EAX, ECX, EDX, ESP = 0, 1, 2, 4
 
 
-def _family(r):
+def family(r):
+    """Семейство регистра: al/ah/ax/eax → 0, cl/ch/cx/ecx → 1 и т. д."""
     return r.num & 3 if r.size == 8 else r.num
+
+
+_family = family
 
 
 def _walk(node):

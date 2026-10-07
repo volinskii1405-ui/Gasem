@@ -153,10 +153,11 @@ class MemOperand:
 
 
 class ImmOperand:
-    def __init__(self, expr, size=None, jump=None):
+    def __init__(self, expr, size=None, jump=None, from_string=False):
         self.expr = expr
         self.size = size     # явный размер (byte/word/dword)
         self.jump = jump     # short / near / far
+        self.from_string = from_string   # "строка" в команде — это её адрес
 
 
 class FarOperand:
@@ -257,3 +258,24 @@ class IncbinStmt(Stmt):
     def __init__(self, data, loc):
         self.data = data
         self.loc = loc
+
+
+class CallStmt(Stmt):
+    """call/jmp с аргументами: call puts - "Hello". Разворачивается после разбора,
+    когда известны все объявления args."""
+
+    def __init__(self, mnemonic, prefixes, target, args, bits, loc):
+        self.mnemonic = mnemonic
+        self.prefixes = prefixes
+        self.target = target
+        self.args = args
+        self.bits = bits
+        self.loc = loc
+
+
+class PoolStmt(Stmt):
+    """pool — место для строк из команд, встреченных выше."""
+
+    def __init__(self, loc):
+        self.loc = loc
+        self.entries = []    # (метка, bytes)

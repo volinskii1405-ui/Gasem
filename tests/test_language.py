@@ -251,7 +251,7 @@ class LabelsTest(unittest.TestCase, ErrorsMixin):
         self.assertEqual(hexs("X = 5\nY equ X*2+1\nmov ax - Y"), "b8 0b 00")
 
     def test_forward_constant(self):
-        self.assertEqual(hexs("mov bx - SIZE\nSIZE = e-s\ns: nop\ne:"), "bb 01 00 90")
+        self.assertEqual(hexs("mov bx - SIZE\nSIZE = e-st\nst: nop\ne:"), "bb 01 00 90")
 
     def test_label_with_instruction(self):
         self.assertEqual(hexs("start: mov al - 1\njmp start"), "b0 01 eb fc")

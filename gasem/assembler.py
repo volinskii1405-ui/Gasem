@@ -7,6 +7,7 @@
 
 import os
 
+from . import hints
 from . import nodes as N
 from . import x86
 from .errors import GasemError, GasemErrors
@@ -19,11 +20,13 @@ MAX_ERRORS = 50
 
 
 class CompileResult:
-    def __init__(self, code, origin, symbols, listing):
+    def __init__(self, code, origin, symbols, listing, lines=(), warnings=()):
         self.code = code          # bytes — готовый машинный код
         self.origin = origin      # адрес загрузки (og)
         self.symbols = symbols    # имя -> значение
         self.listing = listing    # текст листинга
+        self.lines = list(lines)  # (адрес, размер, режим, место в исходнике) — для отладчика
+        self.warnings = list(warnings)
 
 
 class EncodeCtx:
@@ -71,7 +74,8 @@ class Assembler:
             if self.errors:
                 raise GasemErrors(self.errors)
             if not self.changed and self.cur == self.prev:
-                return CompileResult(bytes(self.out), self.org, dict(self.cur), self.make_listing())
+                return CompileResult(bytes(self.out), self.org, dict(self.cur), self.make_listing(),
+                                     self.line_map)
             self.prev = self.cur
         raise GasemErrors([GasemError(
             f"размеры команд не стабилизировались за {MAX_PASSES} проходов "
@@ -88,6 +92,7 @@ class Assembler:
         self.bits = 16
         self.do_strings = {}
         self.records = [] if final else None
+        self.line_map = []
         for st in self.stmts:
             start = len(self.out)
             addr = self.org + start
@@ -104,6 +109,8 @@ class Assembler:
                 if isinstance(st, N.OrgStmt):
                     addr = self.org
                 self.records.append((st.loc, addr, bytes(self.out[start:])))
+                if len(self.out) > start:
+                    self.line_map.append((addr, len(self.out) - start, self.bits, st.loc))
 
     # ------------------------------------------------ символы
 
@@ -276,7 +283,8 @@ class Assembler:
             if not self.final:
                 ev.known = False
                 return 0
-            raise GasemError(f"неизвестная переменная '{name}'", None, node.col)
+            hint = hints.suggest_name(name, self.var_defs)
+            raise GasemError(f"неизвестная переменная '{name}'{hint}", None, node.col)
         if st.kind == "fill":
             return 0
         items = st.items
@@ -358,9 +366,12 @@ class Assembler:
 # ---------------------------------------------------------------- API
 
 def _assemble(parser):
+    parser.finish()
     if parser.errors:
         raise GasemErrors(parser.errors)
-    return Assembler(parser).assemble()
+    result = Assembler(parser).assemble()
+    result.warnings = parser.warnings
+    return result
 
 
 def compile_source(text, filename="<источник>", base_dir=None):
