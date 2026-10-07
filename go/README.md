@@ -26,8 +26,8 @@ go install github.com/volinskii1405-ui/Gasem/go/cmd/gasem@latest
 
 ```sh
 cd go
-go build -o gasem ./cmd/gasem       # Windows: -o gasem.exe
-./gasem ../examples/hello.gsm
+go build -o bin/ ./cmd/gasem        # → go/bin/gasem (в Windows — gasem.exe)
+bin/gasem ../examples/hello.gsm
 ```
 
 Архивы для всех систем сразу: `go/release.sh` → папка `dist/`.
