@@ -80,15 +80,34 @@
       "do \"${1:4+4}\" - ${2:ax}"
     ]
   },
-  "Подпрограмма с аргументами": {
+  "Процедура": {
     "prefix": "proc",
+    "description": "процедура: аргументы в регистрах, локальные переменные, return",
     "body": [
-      "args ${1:name} - ${2:esi}",
-      "${1:name}:",
-      "    push ${3:eax}",
+      "proc ${1:name} - ${2:esi} uses ${3:ebx}",
+      "    local ${4:count} - ${5:dword}",
       "    $0",
-      "    pop ${3:eax}",
-      "    ret"
+      "    return ${6:eax}",
+      "end"
+    ]
+  },
+  "Макрос": {
+    "prefix": "macro",
+    "description": "макрос с параметрами",
+    "body": [
+      "macro ${1:name} - ${2:param}",
+      "    $0",
+      "end"
+    ]
+  },
+  "Структура": {
+    "prefix": "struct",
+    "description": "структура: поля Имя.поле и размер Имя.size",
+    "body": [
+      "struct ${1:Point}",
+      "    ${2:x}: ${3:w}",
+      "    ${4:y}: ${5:w}",
+      "end"
     ]
   },
   "Строка с нулём": {

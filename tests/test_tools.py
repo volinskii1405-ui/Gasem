@@ -118,8 +118,6 @@ class VSCodeTest(unittest.TestCase):
             body = "\n".join(sn["body"])
             body = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", body)      # ${1:текст} → текст
             body = re.sub(r"\$\d+", "nop", body)                   # $0 → nop
-            if name == "Подпрограмма с аргументами":
-                body = body.replace("name", "f")
             with self.subTest(snippet=name):
                 compile_source("b 32\n" + body + ("\nx d: 0\ny d: 0" if "[x]" in body else ""))
 
