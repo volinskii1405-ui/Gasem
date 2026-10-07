@@ -4,7 +4,7 @@ from . import x86
 
 DIRECTIVE_WORDS = {"og", "align", "include", "incbin", "do", "pool", "args", "equ",
                    "if", "elif", "else", "end", "while", "for", "repeat", "until",
-                   "break", "continue", "let"}
+                   "break", "continue", "let", "macro", "proc", "struct", "at", "local", "return"}
 COMMAND_WORDS = sorted(x86.MNEMONICS | set(x86.ALIASES) | {"jf" + cc for cc in x86.CC}
                        | set(x86.PREFIXES) | DIRECTIVE_WORDS)
 

@@ -1,8 +1,9 @@
 """gasem fmt — приводит программу к единому виду.
 
 Меняются только пробелы, поэтому смысл программы остаться прежним не может:
-  * тело if / while / for / repeat сдвигается на 4 пробела от начала блока,
-    elif / else / end / until — на уровень начала блока;
+  * тело if / while / for / repeat / macro / proc / struct / at сдвигается
+    на 4 пробела от начала блока, elif / else / end / until — на уровень
+    начала блока;
   * комментарии в конце строк выравниваются в один столбец (в пределах
     группы строк без пустых строк между ними);
   * табуляция заменяется пробелами, пробелы в конце строк убираются.
@@ -11,7 +12,7 @@
 from .lexer import tokenize, ID, OP
 from .errors import GasemError
 
-OPENERS = {"if", "while", "for", "repeat"}
+OPENERS = {"if", "while", "for", "repeat", "macro", "proc", "struct", "at"}
 MIDDLE = {"elif", "else"}
 CLOSERS = {"end", "until"}
 DATA_WORDS = {"b", "w", "d", "q", "s"}

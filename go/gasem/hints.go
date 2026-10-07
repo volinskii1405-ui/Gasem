@@ -9,7 +9,7 @@ import (
 
 var directiveWords = []string{"og", "align", "include", "incbin", "do", "pool", "args", "equ",
 	"if", "elif", "else", "end", "while", "for", "repeat", "until",
-	"break", "continue", "let"}
+	"break", "continue", "let", "macro", "proc", "struct", "at", "local", "return"}
 
 // CommandWords — все слова, которые могут стоять на месте команды, по алфавиту.
 var CommandWords = func() []string {

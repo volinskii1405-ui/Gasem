@@ -19,6 +19,9 @@ var directives = map[string]bool{"og": true, "align": true, "incbin": true, "inc
 // Reserved — слова, которые нельзя использовать как имена.
 var Reserved = func() map[string]bool {
 	m := map[string]bool{"a20": true, "s": true}
+	for k := range blockWords {
+		m[k] = true
+	}
 	for k := range Registers {
 		m[k] = true
 	}
@@ -240,6 +243,17 @@ type Parser struct {
 	hasFirstLabel  bool
 	warnings       []*Error
 	finished       bool
+	macros         map[string]*macro
+	collecting     *macro // макрос, тело которого сейчас собирается
+	macroDepth     int
+	macroCounter   int
+	macroLines     int
+
+	// для языкового сервера
+	ReadFile func(path string) ([]byte, error) // чтение файлов (nil — с диска)
+	Defs     []*Def                            // все объявления имён
+	lastDef  map[string]*Def
+	structs  map[string]*structInfo
 }
 
 func NewParser() *Parser {
@@ -250,6 +264,8 @@ func NewParser() *Parser {
 		pendingStrings: map[string]string{},
 		stringFirstUse: map[string]Stmt{},
 		referenced:     map[string]bool{},
+		macros:         map[string]*macro{},
+		structs:        map[string]*structInfo{},
 	}
 	p.hl = &highLevel{p: p}
 	return p
@@ -257,8 +273,8 @@ func NewParser() *Parser {
 
 // ------------------------------------------------ файлы
 
-func readSource(path string) (string, *Error) {
-	data, err := os.ReadFile(path)
+func (p *Parser) readSource(path string) (string, *Error) {
+	data, err := p.readFile(path)
 	if err != nil {
 		return "", &Error{Message: fmt.Sprintf("не удалось открыть файл '%s': %s", path, Strerror(err)), Col: NoCol}
 	}
@@ -288,7 +304,7 @@ func (p *Parser) ParseFile(path string, loc *SourceLoc) {
 	if len(p.includeStack) >= maxIncludeDepth {
 		failAt("слишком глубокая вложенность include", loc, NoCol)
 	}
-	text, e := readSource(path)
+	text, e := p.readSource(path)
 	if e != nil {
 		e.Loc = loc
 		panic(e)
@@ -309,6 +325,10 @@ func (p *Parser) ParseText(text, filename, baseDir string) {
 		p.lines = append(p.lines, loc)
 		p.currentLoc = loc
 		p.stringsWaiting = nil
+		if p.collecting != nil {
+			p.collectMacroLine(line, loc)
+			continue
+		}
 		if e := catch(func() {
 			toks := Tokenize(line, loc, 0, true)
 			if len(toks) > 0 {
@@ -320,6 +340,10 @@ func (p *Parser) ParseText(text, filename, baseDir string) {
 			}
 			p.errors = append(p.errors, e)
 		}
+	}
+	if p.collecting != nil {
+		p.errors = append(p.errors, &Error{Message: "macro без end", Loc: p.collecting.loc, Col: NoCol})
+		p.collecting = nil
 	}
 	p.hl.closeFile(depth, &p.errors)
 }
@@ -343,17 +367,25 @@ func (p *Parser) fullName(tok *Token) string {
 	return name
 }
 
+func (p *Parser) readFile(path string) ([]byte, error) {
+	if p.ReadFile != nil {
+		return p.ReadFile(path)
+	}
+	return os.ReadFile(path)
+}
+
 func (p *Parser) defineLabel(tok *Token, loc *SourceLoc) *LabelStmt {
 	p.checkName(tok)
 	name := p.fullName(tok)
-	if !strings.HasPrefix(tok.Value, ".") {
+	if !strings.HasPrefix(tok.Value, ".") && !strings.HasPrefix(tok.Value, "@") { // @… — метки внутри макросов
 		p.lastGlobal, p.hasGlobal = name, true
 	}
 	st := &LabelStmt{Name: name, Loc: loc, Col: tok.Col}
+	p.addDef(&Def{Name: name, Kind: "label", Loc: loc, Col: tok.Col})
 	p.statements = append(p.statements, st)
 	p.pendingLabels = append(p.pendingLabels, name)
 	p.defined = append(p.defined, definedLabel{name, loc, tok.Col})
-	if !p.hasFirstLabel {
+	if !p.hasFirstLabel && !strings.HasPrefix(name, "@") {
 		p.firstLabel, p.hasFirstLabel = name, true
 	}
 	return st
@@ -363,6 +395,9 @@ func (p *Parser) emit(st Stmt) {
 	if d, ok := st.(*DataStmt); ok {
 		for _, name := range p.pendingLabels {
 			p.varDefs[name] = d
+			if def := p.lastDef[name]; def != nil && def.Kind == "label" {
+				def.Kind = "var"
+			}
 		}
 	}
 	p.pendingLabels = nil
@@ -378,6 +413,16 @@ func (p *Parser) emit(st Stmt) {
 // ------------------------------------------------ строки
 
 func (p *Parser) parseLine(toks []*Token, loc *SourceLoc, baseDir string) {
+	if n := len(p.hl.blocks); n > 0 {
+		blk := p.hl.blocks[n-1]
+		if blk.kind == "struct" && statementWord(toks) != "end" {
+			p.structField(blk, toks, loc)
+			return
+		}
+		if blk.kind == "proc" && blk.header && !toks[0].IsID("local") {
+			p.hl.prologue(blk, loc)
+		}
+	}
 	ts := newStream(toks, loc)
 	// метки "имя:" в начале строки
 	for {
@@ -404,6 +449,7 @@ func (p *Parser) parseLine(toks []*Token, loc *SourceLoc, baseDir string) {
 		expr := p.parseExpr(ts, "")
 		ts.expectEnd("строки")
 		p.emit(&ConstStmt{Name: name, Expr: expr, Loc: loc, Col: t0.Col})
+		p.addDef(&Def{Name: name, Kind: "const", Loc: loc, Col: t0.Col, Detail: strings.TrimSpace(tokensText(loc, ts.toks[2:]))})
 		return
 	}
 	p.parseStatement(ts, loc, baseDir, true)
@@ -494,6 +540,43 @@ func (p *Parser) parseStatement(ts *tokenStream, loc *SourceLoc, baseDir string,
 	}
 	word := lower(t.Value)
 
+	if m, ok := p.macros[t.Value]; ok {
+		if !emit {
+			ts.error("макрос нельзя повторять через && — повторите команды внутри макроса")
+		}
+		ts.next()
+		p.expandMacro(m, t, ts.rest(), loc, baseDir)
+		return nil
+	}
+
+	if st, ok := p.structs[t.Value]; ok && !(ts.peek(1) != nil && ts.peek(1).IsOp(":")) {
+		ts.next()
+		return p.structInstance(st, t, ts.rest(), loc, emit)
+	}
+
+	if blockWords[word] {
+		if !emit {
+			ts.error(word + " нельзя повторять через &&")
+		}
+		ts.next()
+		rest := ts.rest()
+		switch word {
+		case "macro":
+			p.wordMacro(t, rest, loc)
+		case "proc":
+			p.wordProc(t, rest, loc)
+		case "struct":
+			p.wordStruct(t, rest, loc)
+		case "at":
+			p.wordAt(t, rest, loc)
+		case "local":
+			p.wordLocal(t, rest, loc)
+		case "return":
+			p.wordReturn(t, rest, loc)
+		}
+		return nil
+	}
+
 	if controlWords[word] {
 		if !emit {
 			ts.error(word + " нельзя повторять через &&")
@@ -562,7 +645,7 @@ func (p *Parser) parseStatement(ts *tokenStream, loc *SourceLoc, baseDir string,
 			}
 		}
 		full := resolvePath(path, baseDir)
-		data, err := os.ReadFile(full)
+		data, err := p.readFile(full)
 		if err != nil {
 			failAt(fmt.Sprintf("не удалось открыть файл '%s': %s", path, Strerror(err)), loc, NoCol)
 		}
@@ -687,7 +770,16 @@ func (p *Parser) parsePostfixIf(ts *tokenStream, idx int, loc *SourceLoc, baseDi
 		p.hl.loopJump(word, first, ifTok, cond, loc)
 		return
 	}
-	if (controlWords[word] && word != "let") || first.IsOp("&&") {
+	if word == "return" {
+		blk := p.hl.procBlock(first)
+		acc := accFor(blk.bits).Name
+		if len(stmt) == 1 || (len(stmt) == 2 && stmt[1].IsID(acc)) { // return [eax] if … — один переход
+			p.hl.condJump(blk.exit, ifTok, cond, loc, true)
+			return
+		}
+	}
+	if (controlWords[word] && word != "let") || word == "macro" || word == "proc" || word == "struct" ||
+		word == "at" || word == "local" || first.IsOp("&&") {
 		failAt(fmt.Sprintf("'%s' нельзя дополнить условием в конце строки", first.Text), loc, first.Col)
 	}
 	hasSep := false
@@ -1109,6 +1201,14 @@ func (p *Parser) parseOperand(toks []*Token, loc *SourceLoc) Operand {
 	}
 	ts.expectEnd("операнда")
 	if r := firstReg(expr); r != nil {
+		if r.Local != "" {
+			acc := "ax"
+			if r.Reg.Size == 32 {
+				acc = "eax"
+			}
+			failAt(fmt.Sprintf("'%s' — локальная переменная (лежит в стеке): значение — [%s], адрес — lea %s - [%s]",
+				r.Local, r.Local, acc, r.Local), loc, r.C)
+		}
 		msg := fmt.Sprintf("регистр %s нельзя использовать в выражении", r.Reg.Name)
 		for _, x := range toks {
 			if x.IsOp("-") {
@@ -1137,6 +1237,11 @@ func (p *Parser) parseMem(ts *tokenStream, size int) *MemOperand {
 	}
 	if ts.peek(0) != nil && ts.peek(0).IsOp("]") {
 		ts.error("пустой адрес []")
+	}
+	if t0, t1 := ts.peek(0), ts.peek(1); size == 0 && t0 != nil && t0.Kind == ID && t1 != nil && t1.IsOp("]") {
+		if v, ok := p.localVar(t0.Value); ok {
+			size = v.memSize // [count] — размер из local count - dword
+		}
 	}
 	expr := p.parseExpr(ts, "mem")
 	closeTok := ts.peek(0)
@@ -1378,10 +1483,13 @@ func (p *Parser) primary(ts *tokenStream, mode string) Expr {
 	if t.Kind == ID {
 		low := lower(t.Value)
 		if reg, ok := Registers[low]; ok {
-			return &RegNode{reg, t.Col}
+			return &RegNode{reg, t.Col, ""}
 		}
 		if Reserved[low] {
 			ts.errorAt(fmt.Sprintf("'%s' нельзя использовать в выражении", t.Value), t)
+		}
+		if v, ok := p.localVar(t.Value); ok { // локальная переменная proc → [ebp-смещение]
+			return &Binary{"+", &RegNode{p.frameReg(), t.Col, t.Value}, &Num{bi(int64(-v.offset)), t.Col}, t.Col}
 		}
 		name := p.fullName(t)
 		p.referenced[name] = true

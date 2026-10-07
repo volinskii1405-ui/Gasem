@@ -34,9 +34,11 @@ type Here struct{ C int }
 type Start struct{ C int }
 
 // RegNode — регистр внутри выражения (допустим только в адресе [..]).
+// Local — имя локальной переменной proc, если регистр взялся из неё ([ebp-4]).
 type RegNode struct {
-	Reg *Reg
-	C   int
+	Reg   *Reg
+	C     int
+	Local string
 }
 
 // Var — [имя] внутри выражения do: значение переменной целиком.
@@ -264,6 +266,17 @@ type CallStmt struct {
 	Loc      *SourceLoc
 }
 
+// AtStmt — at АДРЕС: код ниже работает по другому адресу, чем лежит в файле.
+type AtStmt struct {
+	Expr Expr
+	Loc  *SourceLoc
+}
+
+// AtEndStmt — end блока at.
+type AtEndStmt struct {
+	Loc *SourceLoc
+}
+
 type poolEntry struct {
 	Label string
 	Value []byte
@@ -287,6 +300,8 @@ func (s *DoStmt) Location() *SourceLoc     { return s.Loc }
 func (s *IncbinStmt) Location() *SourceLoc { return s.Loc }
 func (s *CallStmt) Location() *SourceLoc   { return s.Loc }
 func (s *PoolStmt) Location() *SourceLoc   { return s.Loc }
+func (s *AtStmt) Location() *SourceLoc     { return s.Loc }
+func (s *AtEndStmt) Location() *SourceLoc  { return s.Loc }
 
 func newInstr(prefixes []byte, mn string, ops []Operand, loc *SourceLoc, written string) *InstrStmt {
 	if written == "" {

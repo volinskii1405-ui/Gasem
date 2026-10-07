@@ -42,11 +42,14 @@ class Start(Expr):
 
 
 class RegNode(Expr):
-    """Регистр внутри выражения (допустим только в адресе [..])."""
+    """Регистр внутри выражения (допустим только в адресе [..]).
 
-    def __init__(self, reg, col=None):
+    local — имя локальной переменной proc, если регистр взялся из неё ([ebp-4])."""
+
+    def __init__(self, reg, col=None, local=None):
         self.reg = reg
         self.col = col
+        self.local = local
 
 
 class Var(Expr):
@@ -270,6 +273,21 @@ class CallStmt(Stmt):
         self.target = target
         self.args = args
         self.bits = bits
+        self.loc = loc
+
+
+class AtStmt(Stmt):
+    """at АДРЕС — код ниже работает по другому адресу, чем лежит в файле."""
+
+    def __init__(self, expr, loc):
+        self.expr = expr
+        self.loc = loc
+
+
+class AtEndStmt(Stmt):
+    """end блока at."""
+
+    def __init__(self, loc):
         self.loc = loc
 
 

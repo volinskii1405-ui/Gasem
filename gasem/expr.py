@@ -52,7 +52,7 @@ class Evaluator:
         if isinstance(node, N.Here):
             return self.here
         if isinstance(node, N.Start):
-            return self.asm.org
+            return self.asm.start()
         if isinstance(node, N.RegNode):
             if self.mode == "do":
                 self.error(f"регистр {node.reg.name} нельзя использовать в do: "

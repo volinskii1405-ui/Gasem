@@ -136,12 +136,18 @@ class HighLevel:
 
         elif word == "end":
             if not self.blocks:
-                _error("end без if, while или for", word_tok)
+                _error("end без открытого блока (if, while, for, proc, struct, at)", word_tok)
             blk = self.blocks[-1]
             if blk.kind == "repeat":
                 _error("repeat закрывается словом until, а не end", word_tok)
             self.blocks.pop()
-            if blk.kind == "if":
+            if blk.kind == "proc":
+                self.end_proc(blk, loc)
+            elif blk.kind == "struct":
+                self.p.end_struct(blk, loc)
+            elif blk.kind == "at":
+                self.p.emit(N.AtEndStmt(loc))
+            elif blk.kind == "if":
                 if blk.next is not None:
                     self.label(blk.next, loc)
                 self.label(blk.end, loc)
@@ -160,6 +166,48 @@ class HighLevel:
                     self.instr("sub", [blk.var, N.ImmOperand(N.Num(-blk.step))], loc)
                 self.jump("jmp", blk.top, loc)
                 self.label(blk.end, loc)
+
+    # ------------------------------------------------ proc
+
+    def proc_block(self, word_tok):
+        blk = next((b for b in self.blocks if b.kind == "proc"), None)
+        if blk is None:
+            _error("return вне proc", word_tok)
+        return blk
+
+    def frame_regs(self, blk):
+        if blk.bits == 32:
+            return x86.REGISTERS["ebp"], x86.REGISTERS["esp"]
+        return x86.REGISTERS["bp"], x86.REGISTERS["sp"]
+
+    def prologue(self, blk, loc):
+        """Начало тела proc: кадр для локальных переменных и сохранение регистров uses."""
+        blk.header = False
+        if blk.locals:
+            bp, sp = self.frame_regs(blk)
+            word = blk.bits // 8
+            size = (blk.frame_size + word - 1) // word * word
+            self.instr("push", [N.RegOperand(bp)], loc)
+            self.instr("mov", [N.RegOperand(bp), N.RegOperand(sp)], loc)
+            self.instr("sub", [N.RegOperand(sp), N.ImmOperand(N.Num(size))], loc)
+        for r in blk.uses:
+            self.instr("push", [N.RegOperand(r)], loc)
+
+    def end_proc(self, blk, loc):
+        """end процедуры: общий выход — восстановить регистры, снять кадр, ret."""
+        if blk.header:
+            self.prologue(blk, loc)
+        last = self.p.statements[-1] if self.p.statements else None
+        if (isinstance(last, N.InstrStmt) and last.mnemonic == "jmp" and len(last.operands) == 1
+                and isinstance(last.operands[0], N.ImmOperand)
+                and isinstance(last.operands[0].expr, N.Sym) and last.operands[0].expr.name == blk.exit):
+            self.p.statements.pop()             # return прямо перед end — переход не нужен
+        self.label(blk.exit, loc)
+        for r in reversed(blk.uses):
+            self.instr("pop", [N.RegOperand(r)], loc)
+        if blk.locals:
+            self.instr("leave", [], loc)
+        self.instr("ret", [], loc)
 
     def cond_jump(self, target, word_tok, toks, loc, value=True):
         """Перейти на target, если условие из toks равно value."""

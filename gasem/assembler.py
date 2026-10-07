@@ -93,9 +93,11 @@ class Assembler:
         self.do_strings = {}
         self.records = [] if final else None
         self.line_map = []
+        self.shift = 0            # at: адрес, по которому код работает, минус адрес в файле
+        self.at_stack = []        # (прежний shift, адрес блока at)
         for st in self.stmts:
             start = len(self.out)
-            addr = self.org + start
+            addr = self.here()
             try:
                 self.exec(st, ())
             except GasemError as e:
@@ -106,11 +108,11 @@ class Assembler:
                 if len(self.errors) >= MAX_ERRORS:
                     break
             if final:
-                if isinstance(st, N.OrgStmt):
-                    addr = self.org
-                self.records.append((st.loc, addr, bytes(self.out[start:])))
+                if isinstance(st, (N.OrgStmt, N.AtStmt, N.AtEndStmt)):
+                    addr = self.here()
+                self.records.append((st.loc.top, addr, bytes(self.out[start:])))
                 if len(self.out) > start:
-                    self.line_map.append((addr, len(self.out) - start, self.bits, st.loc))
+                    self.line_map.append((addr, len(self.out) - start, self.bits, st.loc.top))
 
     # ------------------------------------------------ символы
 
@@ -125,7 +127,11 @@ class Assembler:
         self.cur[name] = value
 
     def here(self):
-        return self.org + len(self.out)
+        return self.org + len(self.out) + self.shift
+
+    def start(self):
+        """$$ — начало программы (og) или текущего блока at."""
+        return self.at_stack[-1][1] if self.at_stack else self.org
 
     def eval_int(self, expr, here, need_known=False, what="значение"):
         ev = Evaluator(self, here)
@@ -147,6 +153,12 @@ class Assembler:
             self.define(st.name, v, st.col)
 
         elif isinstance(st, N.OrgStmt):
+            if self.at_stack:
+                v, _ = self.eval_int(st.expr, here, need_known=True, what="адрес og")
+                if v != self.at_stack[-1][1]:
+                    raise GasemError(f"og внутри at должен совпадать с адресом at "
+                                     f"({self.at_stack[-1][1]:#x}), указано {v:#x}")
+                return
             if self.org_seen:
                 raise GasemError("og можно указать только один раз")
             if self.out:
@@ -200,6 +212,17 @@ class Assembler:
 
         elif isinstance(st, N.IncbinStmt):
             self.emit(st.data)
+
+        elif isinstance(st, N.AtStmt):
+            self.at_stack.append((self.shift, here))     # при ошибке в адресе блок остаётся на месте
+            v, _ = self.eval_int(st.expr, here, need_known=True, what="адрес at")
+            if v < 0:
+                raise GasemError("адрес at не может быть отрицательным")
+            self.at_stack[-1] = (self.shift, v)
+            self.shift = v - (self.org + len(self.out))
+
+        elif isinstance(st, N.AtEndStmt):
+            self.shift = self.at_stack.pop()[0]
 
         else:
             raise AssertionError(st)

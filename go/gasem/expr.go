@@ -78,7 +78,7 @@ func (ev *evaluator) eval(node Expr) value {
 	case *Here:
 		return intValue(ev.here)
 	case *Start:
-		return intValue(ev.asm.org)
+		return intValue(ev.asm.start())
 	case *RegNode:
 		if ev.mode == "do" {
 			ev.error(fmt.Sprintf("регистр %s нельзя использовать в do: "+

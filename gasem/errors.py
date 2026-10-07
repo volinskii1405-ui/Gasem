@@ -2,14 +2,25 @@
 
 
 class SourceLoc:
-    """Место в исходном тексте: файл, номер строки и сама строка."""
+    """Место в исходном тексте: файл, номер строки и сама строка.
 
-    __slots__ = ("file", "line", "text")
+    У строк, развёрнутых из макроса, origin — строка с вызовом макроса
+    (к ней относятся байты в листинге и шаги отладчика), via — откуда вызван.
+    """
 
-    def __init__(self, file, line, text):
+    __slots__ = ("file", "line", "text", "origin", "via")
+
+    def __init__(self, file, line, text, origin=None, via=None):
         self.file = file
         self.line = line
         self.text = text
+        self.origin = origin
+        self.via = via
+
+    @property
+    def top(self):
+        """Строка программы, к которой относится эта строка (для макросов — вызов)."""
+        return self.origin or self
 
     def __str__(self):
         return f"{self.file}:{self.line}"
@@ -36,6 +47,8 @@ class GasemError(Exception):
             if self.col is not None and 0 <= self.col <= len(text):
                 pad = len(text[: self.col].expandtabs(4))
                 out += "\n    " + " " * pad + "^"
+        if self.loc.via:
+            out += f"\n    ({self.loc.via})"
         return out
 
     def __str__(self):

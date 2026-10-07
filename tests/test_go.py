@@ -28,7 +28,9 @@ WORDS = ["mov", "if", "end", "else", "elif", "while", "for", "let", "do", "b:", 
          "b 32", "ax", "eax", "al", "[bx]", "[esi+4]", " - ", "pool", "args", "call", "jmp", "push", "pop",
          "repeat", "until", "break", "continue", "signed", "not", "and", "or", "zero", "carry", "byte", "word",
          "short", "far", "$", "$$", "510-($-$$)", '"str"', "'c'", "nxtb", "chk", "jfnz", "a20", "es:[di]",
-         "1<<4", "-1", "label:", ".loc:", "x = 5", "ret if carry", "break if al = 1", "int 0x10"]
+         "1<<4", "-1", "label:", ".loc:", "x = 5", "ret if carry", "break if al = 1", "int 0x10",
+         "macro m - a", "proc f - esi", "uses ebx", "local v - dword", "return", "return eax",
+         "struct P", "x: w", "P 1 - 2", "at 0x500", "m eax", "[v]", "P.x"]
 
 EDGE_CASES = [
     "q: 0xFFFFFFFFFFFFFFFF - -1 - 0x10000000000000000", "d: 0xFFFFFFFFFFFFFFFF", "X = 1 << 4096\nb: X >> 4090",
@@ -42,6 +44,15 @@ EDGE_CASES = [
     "mov [bx+bx] - ax", "mov [eax*3] - ax", "mov [esp*2] - eax", "mov al - [-1]",
     'call puts - "a" - "b"\nputs: ret', "args f - eax - ebx\ncall f - ebx - eax\nf: ret",
     "if al = 1\nelse\nelse\nend", "repeat\nuntil not carry and al < 3 or [x]\nx: b: 0",
+    "macro put - c - n\n    mov al - c\n    do \"n * 2\" - bx\nx:\n    jmp x\nend\nput 'A' - 3\nput 'B' - 4",
+    "macro m\n    m\n    m\nend\nm", "macro m - b\nend", "macro mov\nend", "m 1\nmacro m - a\nend\nm",
+    "b 32\nproc f - esi uses ebx - esi\n    local n - dword\n    local buf - byte 16\n    mov [n] - 1\n"
+    "    lea esi - [buf]\n    return [n] if zero\n    return eax\nend\ncall f - \"x\"",
+    "proc f\n    nop\n    local x - word\nend", "return 1", "b 32\nproc f uses eax\n    return 2\nend",
+    "struct P\n    x: w\n    y: d 2\nend\nstruct R\n    a: P\n    tag: b 3\nend\nr: R\np: P 1 - 2\nmov ax - [bx + R.a.y]",
+    "struct P\n    x w\nend", "struct P\n    size: b\nend\nP 1 - 2 - 3",
+    "og 0x7C00\nat 0x50000\nb 32\nx: jmp x\nmov eax - $$\nend\ny: nop", "at nothing\nnop\nend",
+    "og 0x7C00\nnop\nat 0x500\nog 0x600\nend",
 ]
 
 

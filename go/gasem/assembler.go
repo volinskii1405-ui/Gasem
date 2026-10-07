@@ -139,6 +139,12 @@ type assembler struct {
 	doStrings map[string]*big.Int
 	records   []record
 	lineMap   []LineInfo
+	shift     *big.Int  // at: адрес, по которому код работает, минус адрес в файле
+	atStack   []atFrame // блоки at
+}
+
+type atFrame struct {
+	shift, addr *big.Int
 }
 
 func newAssembler(p *Parser) *assembler {
@@ -207,9 +213,11 @@ func (a *assembler) runPass(final bool) {
 	a.doStrings = map[string]*big.Int{}
 	a.records = nil
 	a.lineMap = nil
+	a.shift = bi(0)
+	a.atStack = nil
 	for _, st := range a.stmts {
 		start := len(a.out)
-		addr := addInt(a.org, start)
+		addr := a.here()
 		if e := catch(func() { a.exec(st, "") }); e != nil {
 			if e.Loc == nil {
 				e.Loc = st.Location()
@@ -221,13 +229,15 @@ func (a *assembler) runPass(final bool) {
 			}
 		}
 		if final {
-			if _, ok := st.(*OrgStmt); ok {
-				addr = a.org
+			switch st.(type) {
+			case *OrgStmt, *AtStmt, *AtEndStmt:
+				addr = a.here()
 			}
 			data := append([]byte(nil), a.out[start:]...)
-			a.records = append(a.records, record{st.Location(), addr, data})
+			top := st.Location().Top()
+			a.records = append(a.records, record{top, addr, data})
 			if len(a.out) > start {
-				a.lineMap = append(a.lineMap, LineInfo{addr, len(a.out) - start, a.bits, st.Location()})
+				a.lineMap = append(a.lineMap, LineInfo{addr, len(a.out) - start, a.bits, top})
 			}
 		}
 	}
@@ -265,7 +275,15 @@ func (a *assembler) define(name string, v *big.Int, col int) {
 	a.curOrder = append(a.curOrder, name)
 }
 
-func (a *assembler) here() *big.Int { return addInt(a.org, len(a.out)) }
+func (a *assembler) here() *big.Int { return add(addInt(a.org, len(a.out)), a.shift) }
+
+// start — $$: начало программы (og) или текущего блока at.
+func (a *assembler) start() *big.Int {
+	if n := len(a.atStack); n > 0 {
+		return a.atStack[n-1].addr
+	}
+	return a.org
+}
 
 func (a *assembler) evalInt(expr Expr, here *big.Int, needKnown bool, what string) (*big.Int, bool) {
 	ev := newEvaluator(a, here, "")
@@ -290,6 +308,13 @@ func (a *assembler) exec(st Stmt, rep string) {
 		a.define(s.Name, v, s.Col)
 
 	case *OrgStmt:
+		if n := len(a.atStack); n > 0 {
+			v, _ := a.evalInt(s.Expr, here, true, "адрес og")
+			if v.Cmp(a.atStack[n-1].addr) != 0 {
+				fail(fmt.Sprintf("og внутри at должен совпадать с адресом at (%#x), указано %#x", a.atStack[n-1].addr, v))
+			}
+			return
+		}
 		if a.orgSeen {
 			fail("og можно указать только один раз")
 		}
@@ -361,6 +386,20 @@ func (a *assembler) exec(st Stmt, rep string) {
 
 	case *IncbinStmt:
 		a.emit(s.Data)
+
+	case *AtStmt:
+		a.atStack = append(a.atStack, atFrame{a.shift, here}) // при ошибке в адресе блок остаётся на месте
+		v, _ := a.evalInt(s.Expr, here, true, "адрес at")
+		if v.Sign() < 0 {
+			fail("адрес at не может быть отрицательным")
+		}
+		a.atStack[len(a.atStack)-1] = atFrame{a.shift, v}
+		a.shift = sub(v, addInt(a.org, len(a.out)))
+
+	case *AtEndStmt:
+		n := len(a.atStack)
+		a.shift = a.atStack[n-1].shift
+		a.atStack = a.atStack[:n-1]
 
 	default:
 		panic(fmt.Sprintf("неизвестный оператор %T", st))

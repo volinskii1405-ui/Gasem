@@ -3,15 +3,17 @@ package gasem
 // gasem fmt — приводит программу к единому виду.
 //
 // Меняются только пробелы, поэтому смысл программы остаться прежним не может:
-//   - тело if / while / for / repeat сдвигается на 4 пробела от начала блока,
-//     elif / else / end / until — на уровень начала блока;
+//   - тело if / while / for / repeat / macro / proc / struct / at сдвигается
+//     на 4 пробела от начала блока, elif / else / end / until — на уровень
+//     начала блока;
 //   - комментарии в конце строк выравниваются в один столбец (в пределах
 //     группы строк без пустых строк между ними);
 //   - табуляция заменяется пробелами, пробелы в конце строк убираются.
 
 import "strings"
 
-var fmtOpeners = map[string]bool{"if": true, "while": true, "for": true, "repeat": true}
+var fmtOpeners = map[string]bool{"if": true, "while": true, "for": true, "repeat": true,
+	"macro": true, "proc": true, "struct": true, "at": true}
 var fmtMiddle = map[string]bool{"elif": true, "else": true}
 var fmtClosers = map[string]bool{"end": true, "until": true}
 var dataWords = map[string]bool{"b": true, "w": true, "d": true, "q": true, "s": true}
@@ -45,8 +47,8 @@ func splitComment(line string) (string, string) {
 	return rstrip(line), ""
 }
 
-// statementWord — первое слово оператора (после меток вида «имя:»), в нижнем регистре.
-func statementWord(code string) string {
+// codeStatementWord — первое слово оператора (после меток вида «имя:»), в нижнем регистре.
+func codeStatementWord(code string) string {
 	var toks []*Token
 	if e := catch(func() { toks = Tokenize(code, nil, 0, true) }); e != nil {
 		return ""
@@ -89,7 +91,7 @@ func FormatText(text string) string {
 			rows = append(rows, &fmtRow{indent, "", comment})
 			continue
 		}
-		word := statementWord(body)
+		word := codeStatementWord(body)
 		var indent int
 		if fmtMiddle[word] || fmtClosers[word] {
 			indent = ownIndent

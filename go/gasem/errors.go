@@ -6,10 +6,23 @@ import (
 )
 
 // SourceLoc — место в исходном тексте: файл, номер строки и сама строка.
+//
+// У строк, развёрнутых из макроса, Origin — строка с вызовом макроса
+// (к ней относятся байты в листинге и шаги отладчика), Via — откуда вызван.
 type SourceLoc struct {
-	File string
-	Line int
-	Text string
+	File   string
+	Line   int
+	Text   string
+	Origin *SourceLoc
+	Via    string
+}
+
+// Top — строка программы, к которой относится эта строка (для макросов — вызов).
+func (l *SourceLoc) Top() *SourceLoc {
+	if l.Origin != nil {
+		return l.Origin
+	}
+	return l
 }
 
 func (l *SourceLoc) String() string { return fmt.Sprintf("%s:%d", l.File, l.Line) }
@@ -23,6 +36,8 @@ type Error struct {
 	Loc     *SourceLoc
 	Col     int
 	Warning bool
+
+	macroLimit bool // превышен предел макросов: раскрытие прерывается целиком
 }
 
 func (e *Error) Kind() string {
@@ -45,6 +60,9 @@ func (e *Error) Format() string {
 			pad := runeLen(expandTabs(string([]rune(text)[:e.Col]), 4))
 			out += "\n    " + strings.Repeat(" ", pad) + "^"
 		}
+	}
+	if e.Loc.Via != "" {
+		out += "\n    (" + e.Loc.Via + ")"
 	}
 	return out
 }

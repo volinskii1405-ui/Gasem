@@ -152,7 +152,7 @@ class ControlFlowErrorsTest(unittest.TestCase):
 
     def test_errors(self):
         self.assertError("if al = 1\nnop", "if без end")
-        self.assertError("end", "end без if")
+        self.assertError("end", "end без открытого блока")
         self.assertError("else", "else без if")
         self.assertError("if al = 1\nelse\nelse\nend", "второй else")
         self.assertError("if al = 1\nelse\nelif al = 2\nend", "elif после else")

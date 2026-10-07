@@ -51,6 +51,18 @@ type block struct {
 	hasElse  bool
 	variable Operand
 	step     *big.Int
+
+	// proc
+	name      string
+	uses      []*Reg
+	bits      int
+	locals    map[string]localVar
+	frameSize int
+	header    bool // ещё идут объявления local — пролог не выведен
+	exit      string
+
+	structInfo *structInfo
+	def        *Def // объявление proc или struct (для языкового сервера)
 }
 
 type highLevel struct {
@@ -163,7 +175,7 @@ func (h *highLevel) statement(word string, wordTok *Token, toks []*Token, loc *S
 
 	case "end":
 		if len(h.blocks) == 0 {
-			hlError("end без if, while или for", wordTok)
+			hlError("end без открытого блока (if, while, for, proc, struct, at)", wordTok)
 		}
 		blk := h.blocks[len(h.blocks)-1]
 		if blk.kind == "repeat" {
@@ -171,6 +183,12 @@ func (h *highLevel) statement(word string, wordTok *Token, toks []*Token, loc *S
 		}
 		h.pop()
 		switch blk.kind {
+		case "proc":
+			h.endProc(blk, loc)
+		case "struct":
+			h.p.endStruct(blk, loc)
+		case "at":
+			h.p.emit(&AtEndStmt{Loc: loc})
 		case "if":
 			if blk.hasNext {
 				h.label(blk.next, loc)
@@ -204,6 +222,68 @@ func (h *highLevel) innerLoop() *block {
 		}
 	}
 	return nil
+}
+
+// ------------------------------------------------ proc
+
+func (h *highLevel) procBlock(wordTok *Token) *block {
+	for _, b := range h.blocks {
+		if b.kind == "proc" {
+			return b
+		}
+	}
+	hlError("return вне proc", wordTok)
+	return nil
+}
+
+func frameRegs(blk *block) (*Reg, *Reg) {
+	if blk.bits == 32 {
+		return Registers["ebp"], Registers["esp"]
+	}
+	return Registers["bp"], Registers["sp"]
+}
+
+// prologue — начало тела proc: кадр для локальных переменных и сохранение регистров uses.
+func (h *highLevel) prologue(blk *block, loc *SourceLoc) {
+	blk.header = false
+	if len(blk.locals) > 0 {
+		bp, sp := frameRegs(blk)
+		word := blk.bits / 8
+		size := (blk.frameSize + word - 1) / word * word
+		h.instr("push", []Operand{&RegOperand{bp}}, loc)
+		h.instr("mov", []Operand{&RegOperand{bp}, &RegOperand{sp}}, loc)
+		h.instr("sub", []Operand{&RegOperand{sp}, imm(numNode(int64(size)))}, loc)
+	}
+	for _, r := range blk.uses {
+		h.instr("push", []Operand{&RegOperand{r}}, loc)
+	}
+}
+
+// endProc — end процедуры: общий выход — восстановить регистры, снять кадр, ret.
+func (h *highLevel) endProc(blk *block, loc *SourceLoc) {
+	if blk.def != nil {
+		blk.def.EndLine = loc.Line
+	}
+	if blk.header {
+		h.prologue(blk, loc)
+	}
+	if n := len(h.p.statements); n > 0 {
+		if last, ok := h.p.statements[n-1].(*InstrStmt); ok && last.Mnemonic == "jmp" && len(last.Operands) == 1 {
+			if o, ok := last.Operands[0].(*ImmOperand); ok {
+				if sym, ok := o.Expr.(*Sym); ok && sym.Name == blk.exit {
+					h.p.statements = h.p.statements[:n-1] // return прямо перед end — переход не нужен
+				}
+			}
+		}
+	}
+	h.label(blk.exit, loc)
+	for i := len(blk.uses) - 1; i >= 0; i-- {
+		h.instr("pop", []Operand{&RegOperand{blk.uses[i]}}, loc)
+	}
+	if len(blk.locals) > 0 {
+		h.instr("leave", nil, loc)
+	}
+	h.instr("ret", nil, loc)
 }
 
 // condJump — перейти на target, если условие из toks равно value.
