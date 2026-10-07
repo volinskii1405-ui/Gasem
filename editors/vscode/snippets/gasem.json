@@ -1,0 +1,100 @@
+{
+  "Загрузочный сектор": {
+    "prefix": "boot",
+    "description": "Загрузчик: печать строки через BIOS и сигнатура 0xAA55",
+    "body": [
+      "og 0x7C00",
+      "b 16",
+      "",
+      "start:",
+      "    xor ax - ax",
+      "    mov ds - ax",
+      "    mov si - \"${1:Hello from Gasem!}\"",
+      "    while 1",
+      "        mov ah - 0x0E",
+      "        nxtb",
+      "        break if al = 0",
+      "        int 0x10",
+      "    end",
+      "    jmp $",
+      "",
+      "pool",
+      "&& 510-($-$$) b: 0",
+      "w: 0xAA55",
+      ""
+    ]
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ${1:al = 10}",
+      "    $0",
+      "end"
+    ]
+  },
+  "if / else": {
+    "prefix": "ifelse",
+    "body": [
+      "if ${1:al = 10}",
+      "    $2",
+      "else",
+      "    $0",
+      "end"
+    ]
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while ${1:byte [esi] != 0}",
+      "    $0",
+      "end"
+    ]
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:ecx} - ${2:0} - ${3:10}",
+      "    $0",
+      "end"
+    ]
+  },
+  "repeat / until": {
+    "prefix": "repeat",
+    "body": [
+      "repeat",
+      "    $0",
+      "until ${1:zero}"
+    ]
+  },
+  "let": {
+    "prefix": "let",
+    "description": "выражение во время работы программы",
+    "body": [
+      "let ${1:eax} - \"${2:[x]*80 + [y]}\""
+    ]
+  },
+  "do": {
+    "prefix": "do",
+    "description": "выражение при компиляции",
+    "body": [
+      "do \"${1:4+4}\" - ${2:ax}"
+    ]
+  },
+  "Подпрограмма с аргументами": {
+    "prefix": "proc",
+    "body": [
+      "args ${1:name} - ${2:esi}",
+      "${1:name}:",
+      "    push ${3:eax}",
+      "    $0",
+      "    pop ${3:eax}",
+      "    ret"
+    ]
+  },
+  "Строка с нулём": {
+    "prefix": "str",
+    "body": [
+      "${1:msg} s: \"${2:text}\""
+    ]
+  }
+}

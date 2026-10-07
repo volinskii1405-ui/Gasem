@@ -1,0 +1,271 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Gasem",
+  "scopeName": "source.gasem",
+  "fileTypes": [
+    "gsm"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#constant-definition"
+    },
+    {
+      "include": "#data-label"
+    },
+    {
+      "include": "#label"
+    },
+    {
+      "include": "#expression-statement"
+    },
+    {
+      "include": "#statement"
+    },
+    {
+      "include": "#data"
+    },
+    {
+      "include": "#operands"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.semicolon.gasem",
+      "match": ";.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.gasem",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.gasem",
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+        }
+      ]
+    },
+    "char": {
+      "name": "string.quoted.single.gasem",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.gasem",
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.gasem",
+      "match": "\\b(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9A-Fa-f_]*[hH]|[0-9][0-9_]*)\\b"
+    },
+    "constant-definition": {
+      "match": "^\\s*([A-Za-z_.\\p{L}][\\w.\\p{L}]*)\\s*(=|\\bequ\\b)",
+      "captures": {
+        "1": {
+          "name": "entity.name.constant.gasem"
+        },
+        "2": {
+          "name": "keyword.operator.assignment.gasem"
+        }
+      }
+    },
+    "data-label": {
+      "match": "^\\s*(?!(?i:[bwdqs])\\s*[:\\-/])([A-Za-z_.\\p{L}][\\w.\\p{L}]*)\\s+(?=[bwdqsBWDQS](?::|-|/))",
+      "captures": {
+        "1": {
+          "name": "entity.name.variable.gasem"
+        }
+      }
+    },
+    "label": {
+      "match": "^\\s*(?!(?i:[bwdqs]):)([A-Za-z_.\\p{L}][\\w.\\p{L}]*)\\s*(:)",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.label.gasem"
+        },
+        "2": {
+          "name": "punctuation.definition.label.gasem"
+        }
+      }
+    },
+    "data": {
+      "match": "(?i)\\b([bwdqs])(:|-|/)",
+      "captures": {
+        "1": {
+          "name": "storage.type.data.gasem"
+        },
+        "2": {
+          "name": "storage.type.data.gasem"
+        }
+      }
+    },
+    "expression-statement": {
+      "comment": "do и let: выражение в кавычках подсвечивается как код",
+      "begin": "(?:^|(?<=:))\\s*(?i)\\b(do|let)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.gasem"
+        }
+      },
+      "end": "(?=;)|$",
+      "patterns": [
+        {
+          "name": "keyword.control.gasem",
+          "match": "(?i)\\bsigned\\b"
+        },
+        {
+          "name": "meta.embedded.expression.gasem",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.gasem"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.gasem"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#char"
+            },
+            {
+              "include": "#number"
+            },
+            {
+              "name": "storage.modifier.gasem",
+              "match": "(?i)\\b(?:byte|word|dword|qword|short|near|far)\\b"
+            },
+            {
+              "name": "variable.language.register.gasem",
+              "match": "(?i)\\b(?:cr0|cr2|cr3|cr4|dr0|dr1|dr2|dr3|dr4|dr5|dr6|dr7|eax|ebp|ebx|ecx|edi|edx|esi|esp|ah|al|ax|bh|bl|bp|bx|ch|cl|cs|cx|dh|di|dl|ds|dx|es|fs|gs|si|sp|ss)\\b"
+            },
+            {
+              "name": "variable.language.location.gasem",
+              "match": "\\$\\$?"
+            },
+            {
+              "name": "keyword.operator.gasem",
+              "match": "<<|>>|<=|>=|!=|==|[+\\-*/%&|^~<>=]"
+            }
+          ]
+        },
+        {
+          "include": "#operands"
+        }
+      ]
+    },
+    "statement": {
+      "comment": "команда, директива или управляющее слово в начале строки",
+      "match": "(?:^|(?<=:))\\s*(?i)(?:\\b(cs|ds|es|fs|gs|lock|rep|repe|repne|repnz|repz|ss)\\s+)*(?:\\b(jfnae|jfnbe|jfnge|jfnle|jfae|jfbe|jfge|jfle|jfna|jfnb|jfnc|jfne|jfng|jfnl|jfno|jfnp|jfns|jfnz|jfpe|jfpo|nxtb|nxtd|nxtw|chk|jfa|jfb|jfc|jfe|jfg|jfl|jfo|jfp|jfs|jfz)\\b|\\b(cmovnae|cmovnbe|cmovnge|cmovnle|cmovae|cmovbe|cmovge|cmovle|cmovna|cmovnb|cmovnc|cmovne|cmovng|cmovnl|cmovno|cmovnp|cmovns|cmovnz|cmovpe|cmovpo|invlpg|loopne|loopnz|pushad|pushfd|setnae|setnbe|setnge|setnle|wbinvd|bswap|cmova|cmovb|cmovc|cmove|cmovg|cmovl|cmovo|cmovp|cmovs|cmovz|cmpsb|cmpsd|cmpsw|cpuid|enter|iretd|jecxz|leave|lodsb|lodsd|lodsw|loope|loopz|movsb|movsd|movsw|movsx|movzx|outsb|outsd|outsw|pause|popad|popfd|pusha|pushf|rdmsr|rdtsc|scasb|scasd|scasw|setae|setbe|setge|setle|setna|setnb|setnc|setne|setng|setnl|setno|setnp|setns|setnz|setpe|setpo|stosb|stosd|stosw|wrmsr|xlatb|call|clts|cwde|idiv|imul|insb|insd|insw|int3|into|invd|iret|jcxz|jnae|jnbe|jnge|jnle|lahf|lgdt|lidt|lldt|lmsw|loop|nxtb|nxtd|nxtw|popa|popf|push|retf|retn|sahf|seta|setb|setc|sete|setg|setl|seto|setp|sets|setz|sgdt|sidt|sldt|smsw|test|wait|xchg|xlat|aaa|aas|adc|add|and|bsf|bsr|btc|btr|bts|cbw|cdq|chk|clc|cld|cli|cmc|cmp|cwd|daa|das|dec|div|hlt|inc|int|jae|jbe|jge|jle|jmp|jna|jnb|jnc|jne|jng|jnl|jno|jnp|jns|jnz|jpe|jpo|lds|lea|les|lfs|lgs|lss|ltr|mov|mul|neg|nop|not|out|pop|rcl|rcr|ret|rol|ror|sal|sar|sbb|shl|shr|stc|std|sti|str|sub|ud2|xor|bt|in|ja|jb|jc|je|jg|jl|jo|jp|js|jz|or)\\b|\\b(break|continue|elif|else|end|for|if|repeat|signed|until|while)\\b|\\b(og|align|include|incbin|pool|args|equ)\\b|\\b(b)\\s+(?=\\d)|(&&))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.prefix.gasem"
+        },
+        "2": {
+          "name": "keyword.mnemonic.gasem.alias"
+        },
+        "3": {
+          "name": "keyword.mnemonic.gasem"
+        },
+        "4": {
+          "name": "keyword.control.gasem"
+        },
+        "5": {
+          "name": "keyword.control.directive.gasem"
+        },
+        "6": {
+          "name": "keyword.control.directive.gasem"
+        },
+        "7": {
+          "name": "keyword.operator.repeat.gasem"
+        }
+      }
+    },
+    "operands": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "punctuation.separator.operand.gasem",
+          "match": "(?<=\\s)-(?=\\s|$)"
+        },
+        {
+          "name": "keyword.control.gasem",
+          "match": "(?i)\\b(?:if|and|or|not|signed)\\b"
+        },
+        {
+          "name": "support.constant.flag.gasem",
+          "match": "(?i)\\b(?:zero|carry|sign|overflow|parity)\\b"
+        },
+        {
+          "name": "support.constant.port.gasem",
+          "match": "(?i)\\ba20\\b"
+        },
+        {
+          "name": "storage.modifier.gasem",
+          "match": "(?i)\\b(?:byte|word|dword|qword|short|near|far)\\b"
+        },
+        {
+          "name": "meta.brackets.gasem",
+          "begin": "[\\[(]",
+          "end": "[\\])]",
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "include": "#string"
+            },
+            {
+              "include": "#char"
+            },
+            {
+              "include": "#number"
+            },
+            {
+              "name": "variable.language.register.gasem",
+              "match": "(?i)\\b(?:cr0|cr2|cr3|cr4|dr0|dr1|dr2|dr3|dr4|dr5|dr6|dr7|eax|ebp|ebx|ecx|edi|edx|esi|esp|ah|al|ax|bh|bl|bp|bx|ch|cl|cs|cx|dh|di|dl|ds|dx|es|fs|gs|si|sp|ss)\\b"
+            },
+            {
+              "name": "variable.language.location.gasem",
+              "match": "\\$\\$?"
+            },
+            {
+              "name": "keyword.operator.gasem",
+              "match": "<<|>>|<=|>=|!=|==|[+\\-*/%&|^~<>=]"
+            }
+          ]
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#char"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "name": "variable.language.register.gasem",
+          "match": "(?i)\\b(?:cr0|cr2|cr3|cr4|dr0|dr1|dr2|dr3|dr4|dr5|dr6|dr7|eax|ebp|ebx|ecx|edi|edx|esi|esp|ah|al|ax|bh|bl|bp|bx|ch|cl|cs|cx|dh|di|dl|ds|dx|es|fs|gs|si|sp|ss)\\b"
+        },
+        {
+          "name": "variable.language.location.gasem",
+          "match": "\\$\\$?"
+        },
+        {
+          "name": "keyword.operator.gasem",
+          "match": "<<|>>|<=|>=|!=|==|[+\\-*/%&|^~<>=]"
+        }
+      ]
+    }
+  }
+}
