@@ -79,6 +79,8 @@ qemu-system-i386 -drive format=raw,file=gasemos.img
 
 # Документация языка
 
+Та же документация одним текстовым файлом: [`docs/gasem.txt`](docs/gasem.txt).
+
 ## Общее
 
 - Исходник — текстовый файл в UTF-8, обычно с расширением `.gsm`.
