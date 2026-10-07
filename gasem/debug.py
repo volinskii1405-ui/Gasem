@@ -12,6 +12,7 @@ QEMU стартует остановленным и ждёт GDB. GDB получ
 
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -165,7 +166,9 @@ def debug(result, image, breaks, batch=False, qemu_args=(), timeout=30):
            "-no-reboot", *qemu_args]
     if batch:
         cmd += ["-display", "none"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # своя группа процессов: Ctrl+C в терминале получает GDB, а не QEMU
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
         with tempfile.TemporaryDirectory() as tmp:
             script = os.path.join(tmp, "gasem.gdb")
@@ -173,7 +176,13 @@ def debug(result, image, breaks, batch=False, qemu_args=(), timeout=30):
                 f.write(gdb_script(result, port, breaks, batch))
             args = [gdb_path, "-q", "-x", script]
             if not batch:
-                return subprocess.call(args)
+                # Ctrl+C нужен GDB (остановить программу), а не нам: перехватываем его
+                # и ничего не делаем — у GDB, в отличие от игнорирования, сигнал не пропадёт
+                old = signal.signal(signal.SIGINT, lambda *_: None)
+                try:
+                    return subprocess.call(args)
+                finally:
+                    signal.signal(signal.SIGINT, old)
             args.insert(2, "-batch")
             try:
                 return subprocess.call(args, timeout=timeout)

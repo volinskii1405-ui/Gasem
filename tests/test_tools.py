@@ -17,6 +17,7 @@ from gasem.fmt import format_text
 from gasem.lexer import tokenize
 
 from emu import run_boot, unicorn
+import impl
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 SOURCES = sorted(glob.glob(os.path.join(ROOT, "examples", "*.gsm")) + glob.glob(os.path.join(ROOT, "os", "*.gsm")))
@@ -167,7 +168,7 @@ class DebugTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "hello.gsm")
             shutil.copy(os.path.join(ROOT, "examples", "hello.gsm"), src)
-            r = subprocess.run([sys.executable, "-m", "gasem", "debug", src, "-b", "print", "--batch", "-q"],
+            r = subprocess.run([*impl.GASEM_CMD, "debug", src, "-b", "print", "--batch", "-q"],
                                cwd=ROOT, capture_output=True, text=True, timeout=90)
             self.assertIn("=> hello.gsm:8    mov ah - 0x0E", r.stdout)
             self.assertIn("esi=00007c12", r.stdout)

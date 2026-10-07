@@ -13,24 +13,30 @@ mov ax - 1
 
 ## Быстрый старт
 
-Нужен только Python 3.8+ (без сторонних библиотек).
+Компилятор есть в двух реализациях, которые работают одинаково — те же байты,
+те же сообщения об ошибках, те же команды:
+
+- **на Go** — одна программа `gasem` без зависимостей для Windows, Linux и macOS,
+  в 6 раз быстрее ([go/README.md](go/README.md));
+- **на Python** — нужен только Python 3.8+ (без сторонних библиотек).
 
 ```sh
-python3 -m gasem examples/hello.gsm                # → examples/hello.bin (512 байт)
+gasem examples/hello.gsm                           # → examples/hello.bin (512 байт)
 qemu-system-i386 -drive format=raw,file=examples/hello.bin
 ```
 
 или сразу собрать и запустить в QEMU:
 
 ```sh
-python3 -m gasem run examples/hello.gsm
+gasem run examples/hello.gsm
 ```
 
-Установка как команды `gasem`:
+Где взять `gasem`:
 
 ```sh
-pip install .
-gasem boot.gsm -o boot.bin
+go install github.com/volinskii1405-ui/Gasem/go/cmd/gasem@latest   # Go-версия
+pip install .                                                      # Python-версия
+python3 -m gasem examples/hello.gsm                                # Python-версия без установки
 ```
 
 ### Командная строка
@@ -594,6 +600,9 @@ gasem fmt --diff boot.gsm    # показать изменения
 
 ## Устройство компилятора
 
+Ниже — модули Python-версии. Go-версия в `go/` повторяет их файл в файл
+(таблица соответствия — в [go/README.md](go/README.md)).
+
 | Файл                 | Назначение                                                      |
 |----------------------|-----------------------------------------------------------------|
 | `gasem/lexer.py`     | токены; распознаёт разделитель ` - ` по пробелам вокруг дефиса   |
@@ -635,4 +644,15 @@ python3 -m unittest discover -s tests
   строка, отладка в QEMU + GDB;
 - `tests/test_os.py` — GasemOS собирается, загружается в QEMU, выполняет
   команды; файлы, записанные на диск, остаются после выключения и повторной
-  загрузки (пропускается, если QEMU не установлен).
+  загрузки (пропускается, если QEMU не установлен);
+- `tests/test_go.py` — Go-версия выдаёт то же, что Python-версия: код, листинг,
+  символы, предупреждения и тексты ошибок на всех исходниках, тысячах фрагментов
+  с опечатками и пограничных случаях (пропускается, если не установлен `go`).
+
+Тот же набор тестов проверяет и Go-версию — все функции компилятора
+подменяются вызовами Go-программы:
+
+```sh
+GASEM_IMPL=go python3 -m pytest tests
+cd go && go test ./...                 # собственные тесты Go-пакета
+```

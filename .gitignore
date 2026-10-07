@@ -9,3 +9,7 @@ dist/
 *.img
 node_modules/
 *.vsix
+go/gasem
+go/gasem.exe
+go/gasemapi
+go/gasemapi.exe
