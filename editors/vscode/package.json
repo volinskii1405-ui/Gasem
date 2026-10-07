@@ -5,23 +5,43 @@
   "version": "0.1.0",
   "publisher": "gasem",
   "license": "UNLICENSED",
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages", "Snippets"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volinskii1405-ui/Gasem"
+  },
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
   "contributes": {
-    "languages": [{
-      "id": "gasem",
-      "aliases": ["Gasem", "gasem"],
-      "extensions": [".gsm"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "gasem",
-      "scopeName": "source.gasem",
-      "path": "./syntaxes/gasem.tmLanguage.json"
-    }],
-    "snippets": [{
-      "language": "gasem",
-      "path": "./snippets/gasem.json"
-    }]
+    "languages": [
+      {
+        "id": "gasem",
+        "aliases": [
+          "Gasem",
+          "gasem"
+        ],
+        "extensions": [
+          ".gsm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gasem",
+        "scopeName": "source.gasem",
+        "path": "./syntaxes/gasem.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gasem",
+        "path": "./snippets/gasem.json"
+      }
+    ]
   }
 }

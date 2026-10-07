@@ -34,3 +34,9 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
     rm -rf "$dir"
     echo "dist/$(ls "$out" | grep "^$name\.")"
 done
+
+# расширение VS Code (подсветка, сниппеты) — если есть Node.js
+if command -v npx >/dev/null 2>&1; then
+    (cd "$root/editors/vscode" && npx --yes @vscode/vsce package --skip-license -o "$out/gasem-$version.vsix" >/dev/null)
+    echo "dist/gasem-$version.vsix"
+fi
