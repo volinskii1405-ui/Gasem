@@ -4,4 +4,4 @@
 package gasem
 
 // Version — версия компилятора (та же, что у Python-версии).
-const Version = "0.1.0"
+const Version = "0.2.0"

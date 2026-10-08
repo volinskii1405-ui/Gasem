@@ -37,16 +37,16 @@ main:
 proc iterate - esi - edi uses ebx - ecx - edx
     local n - dword
     mov [n] - 0
-    xor ebx - ebx                ; zx
-    xor ecx - ecx                ; zy
+    xor ebx - ebx                                ; zx
+    xor ecx - ecx                                ; zy
     while dword [n] < ITER
-        let signed eax - "ebx*ebx >> SHIFT"     ; zx²
-        let signed edx - "ecx*ecx >> SHIFT"     ; zy²
+        let signed eax - "ebx*ebx >> SHIFT"      ; zx²
+        let signed edx - "ecx*ecx >> SHIFT"      ; zy²
         add edx - eax
-        break if signed edx > 4*ONE             ; |z|² > 4 — точка улетела
+        break if signed edx > 4*ONE              ; |z|² > 4 — точка улетела
         sub edx - eax
-        sub eax - edx                           ; zx² - zy²
-        let signed ecx - "ebx*ecx >> (SHIFT-1)" ; 2·zx·zy
+        sub eax - edx                            ; zx² - zy²
+        let signed ecx - "ebx*ecx >> (SHIFT-1)"  ; 2·zx·zy
         add ecx - edi
         lea ebx - [eax+esi]
         inc [n]
@@ -58,16 +58,16 @@ end
 proc make_palette uses ebx - ecx - edx - esi - edi
     for ecx - 0 - 63
         mov esi - ecx
-        shr esi - 4              ; участок 0..3: между опорными цветами esi и esi+1
+        shr esi - 4                       ; участок 0..3: между опорными цветами esi и esi+1
         lea esi - [esi+esi*2+stops]
         mov edx - ecx
-        and edx - 15             ; положение внутри участка: 0..15
-        xor ebx - ebx            ; цвет 0xRRGGBB
-        for edi - 0 - 3          ; три канала
+        and edx - 15                      ; положение внутри участка: 0..15
+        xor ebx - ebx                     ; цвет 0xRRGGBB
+        for edi - 0 - 3                   ; три канала
             shl ebx - 8
             push ecx
-            movzx eax - byte [esi+edi]     ; от этого значения
-            movzx ecx - byte [esi+edi+3]   ; к этому
+            movzx eax - byte [esi+edi]    ; от этого значения
+            movzx ecx - byte [esi+edi+3]  ; к этому
             let signed ecx - "(ecx - eax) * edx / 16 + eax"
             or ebx - ecx
             pop ecx

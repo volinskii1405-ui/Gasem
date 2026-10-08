@@ -223,7 +223,8 @@ spawn:
     call task_frame
     mov [ebp+Task.esp] - edi
     mov dword [ebp+Task.wake] - 0
-    mov byte [ebp+Task.state] - TASK_READY   ; с этого момента задача работает
+    ; с этого момента задача может работать
+    mov byte [ebp+Task.state] - TASK_READY
     mov eax - ebx
     pop ebx - ecx - edx - esi - edi - ebp
     clc

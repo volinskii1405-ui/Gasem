@@ -2,7 +2,7 @@
   "name": "gasem",
   "displayName": "Gasem",
   "description": "Подсветка, проверка ошибок при наборе, переход к объявлению, подсказки и сниппеты для языка Gasem",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "gasem",
   "license": "UNLICENSED",
   "repository": {

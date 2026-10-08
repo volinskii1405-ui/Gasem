@@ -27,16 +27,16 @@ main:
     call clear_canvas
     call draw_tools
     while 1
-        mouse                    ; eax = x, ebx = y, ecx = кнопки
+        mouse                         ; eax = x, ebx = y, ecx = кнопки
         mov [mx] - eax
         mov [my] - ebx
         call cursor_off
         chk cl - MOUSE_LEFT|MOUSE_RIGHT
         if zero
-            mov dword [last_x] - -1          ; кнопки отпущены — мазок закончен
+            mov dword [last_x] - -1   ; кнопки отпущены — мазок закончен
         elif ebx >= TOOLS_Y
             if ebx >= TOOLS_Y+4 and cl = MOUSE_LEFT
-                let eax - "eax / 20"         ; щелчок по палитре
+                let eax - "eax / 20"  ; щелчок по палитре
                 mov [color] - eax
                 call draw_tools
             end
@@ -59,7 +59,7 @@ main:
 ; stroke: продолжить мазок до точки (eax, ebx)
 proc stroke - eax - ebx
     if signed dword [last_x] < 0
-        call brush - eax - ebx               ; первая точка мазка
+        call brush - eax - ebx   ; первая точка мазка
     else
         call line - [last_x] - [last_y] - eax - ebx
     end
@@ -164,7 +164,7 @@ end
 
 proc clear_canvas
     rect 0 - CANVAS_Y - GFX_W - TOOLS_Y-CANVAS_Y - WHITE
-    mov dword [cur_x] - -1             ; курсор стёрт вместе с холстом
+    mov dword [cur_x] - -1       ; курсор стёрт вместе с холстом
 end
 
 ; draw_tools: палитра; над выбранным цветом — белая полоска

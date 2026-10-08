@@ -313,7 +313,7 @@ proc draw uses ebx - ecx - edx - esi - edi - ebp
     mov esi - "^S Save  ^Q Quit" if esi = 0
     call bar_str - esi - edi
 
-    call count_lines - [top] - [cur]   ; курсор
+    call count_lines - [top] - [cur]  ; курсор
     lea ebx - [eax+TOP]
     call column
     sub eax - [left]

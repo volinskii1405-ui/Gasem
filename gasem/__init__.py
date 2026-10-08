@@ -7,6 +7,6 @@
 from .assembler import CompileResult, compile_file, compile_source
 from .errors import GasemError, GasemErrors
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["compile_source", "compile_file", "CompileResult", "GasemError", "GasemErrors", "__version__"]

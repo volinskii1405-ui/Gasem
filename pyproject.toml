@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gasem"
-version = "0.1.0"
+version = "0.2.0"
 description = "Gasem — компилируемый язык для загрузчиков и системного ПО (синтаксис в стиле ассемблера x86)"
 readme = "README.md"
 requires-python = ">=3.8"

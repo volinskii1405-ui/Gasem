@@ -243,6 +243,11 @@ def main():
             shots.append(vm.screenshot(os.path.join(out_dir, name)))
             print("снимок:", shots[-1])
 
+        def wait_text(vm, text, timeout=20):
+            end = time.time() + timeout
+            while time.time() < end and not any(text in r.decode("cp437") for r in vm.screen_text()):
+                time.sleep(0.2)
+
         def run(vm, lines, pause=0.3):
             for line in lines:
                 vm.type(line + "\n")
@@ -290,7 +295,7 @@ def main():
                     "  edit    - this text editor\n  paint   - draw with the mouse\n"
                     "  mandel  - the Mandelbrot set\n  music   - a melody on the PC speaker\n"
                     "  ticker  - a background task\n\nCtrl+S saves the file, Ctrl+Q quits.", delay=0.03)
-            time.sleep(0.5)
+            wait_text(vm, "Ctrl+Q quits.")         # QEMU отдаёт нажатия с задержкой
             shot(vm, "10-editor.png")
             vm.key("ctrl-s")
             vm.key("ctrl-q")

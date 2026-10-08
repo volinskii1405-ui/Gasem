@@ -59,7 +59,8 @@ irq1_keyboard:
         if ah >= 'a' and ah <= 'z'
             and al - 0x1F
             if al = 3 and dword [fg_task] != 0
-                mov byte [kill_fg] - 1   ; Ctrl+C: завершить программу
+                ; Ctrl+C: завершить программу
+                mov byte [kill_fg] - 1
                 jmp .eoi
             end
         end

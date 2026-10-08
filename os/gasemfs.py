@@ -4,6 +4,7 @@
     python3 os/gasemfs.py gasemos.img ls               список файлов
     python3 os/gasemfs.py gasemos.img cat note.txt     содержимое файла
     python3 os/gasemfs.py gasemos.img put my.txt       положить файл на диск
+    python3 os/gasemfs.py gasemos.img put a.bin b.bin  … под другим именем
     python3 os/gasemfs.py gasemos.img check            проверить целостность
 
 Формат описан в os/fs.gsm.

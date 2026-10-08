@@ -131,7 +131,8 @@ macro yield                      ; отдать процессор другим 
 end
 
 ; ---- файлы
-macro readfile - name - buf - size   ; → eax: размер файла или -1
+; readfile → eax: размер файла или -1
+macro readfile - name - buf - size
     push ecx - esi - edi
     push size
     push buf
@@ -143,7 +144,8 @@ macro readfile - name - buf - size   ; → eax: размер файла или -
     pop ecx - esi - edi
 end
 
-macro writefile - name - buf - size  ; → eax: 0 или -1
+; writefile → eax: 0 или -1
+macro writefile - name - buf - size
     push ecx - esi - edi
     push size
     push buf
@@ -182,7 +184,8 @@ macro pixel - x - y - c
     pop ebx - ecx - edx
 end
 
-macro rect - x - y - width - height - c   ; закрашенный прямоугольник
+; rect — закрашенный прямоугольник
+macro rect - x - y - width - height - c
     push ebx - ecx - edx - esi - edi
     push c
     push height

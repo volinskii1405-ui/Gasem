@@ -10,12 +10,12 @@
 
 ## Установка
 
-Готовый пакет — `gasem-0.1.0.vsix` (его собирает `go/release.sh` в `dist/`).
+Готовый пакет — `gasem-0.2.0.vsix` (его собирает `go/release.sh` в `dist/`).
 В VS Code: панель расширений (`Ctrl+Shift+X`) → `⋯` вверху → **Install from
 VSIX…** → выбрать файл. Или из терминала:
 
 ```sh
-code --install-extension gasem-0.1.0.vsix
+code --install-extension gasem-0.2.0.vsix
 ```
 
 Собрать пакет самому (нужен Node.js):
@@ -29,9 +29,9 @@ npx @vscode/vsce package --skip-license
 
 ```sh
 # Linux / macOS
-cp -r editors/vscode ~/.vscode/extensions/gasem-0.1.0
+cp -r editors/vscode ~/.vscode/extensions/gasem-0.2.0
 # Windows (PowerShell)
-Copy-Item -Recurse editors\vscode $env:USERPROFILE\.vscode\extensions\gasem-0.1.0
+Copy-Item -Recurse editors\vscode $env:USERPROFILE\.vscode\extensions\gasem-0.2.0
 ```
 
 ## Что есть
