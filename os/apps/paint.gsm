@@ -1,0 +1,182 @@
+; =====================================================================
+;  paint — рисование мышью в графике 320x200.
+;  Левая кнопка — рисовать, правая — стирать, щелчок по палитре внизу —
+;  выбрать цвет. C — очистить холст, Esc — выход.
+; =====================================================================
+
+include "../sdk.gsm"
+
+CANVAS_Y = 16                    ; холст — строки 16..183
+TOOLS_Y  = 184                   ; палитра — 16 цветов по 20 точек
+WHITE    = 15
+TITLE    = 1                     ; синий
+
+color   d: 0                     ; выбранный цвет
+ink     d: 0                     ; цвет текущего мазка (при стирании — белый)
+mx      d: 0                     ; мышь
+my      d: 0
+last_x  d: -1                    ; предыдущая точка мазка (-1 — мазка нет)
+last_y  d: 0
+cur_x   d: -1                    ; где нарисован курсор (-1 — не нарисован)
+cur_y   d: 0
+
+main:
+    graphics
+    rect 0 - 0 - GFX_W - CANVAS_Y - TITLE
+    gtext 4 - 0 - WHITE - "Paint  L:draw R:erase C:clear Esc:exit"
+    call clear_canvas
+    call draw_tools
+    while 1
+        mouse                    ; eax = x, ebx = y, ecx = кнопки
+        mov [mx] - eax
+        mov [my] - ebx
+        call cursor_off
+        chk cl - MOUSE_LEFT|MOUSE_RIGHT
+        if zero
+            mov dword [last_x] - -1          ; кнопки отпущены — мазок закончен
+        elif ebx >= TOOLS_Y
+            if ebx >= TOOLS_Y+4 and cl = MOUSE_LEFT
+                let eax - "eax / 20"         ; щелчок по палитре
+                mov [color] - eax
+                call draw_tools
+            end
+            mov dword [last_x] - -1
+        else
+            mov edx - [color]
+            chk cl - MOUSE_RIGHT
+            mov edx - WHITE if not zero
+            mov [ink] - edx
+            call stroke - [mx] - [my]
+        end
+        pollkey
+        break if eax = KEY_ESC
+        call clear_canvas if eax = 'c' or eax = 'C'
+        call cursor_on
+        sleep 1
+    end
+    ret
+
+; stroke: продолжить мазок до точки (eax, ebx)
+proc stroke - eax - ebx
+    if signed dword [last_x] < 0
+        call brush - eax - ebx               ; первая точка мазка
+    else
+        call line - [last_x] - [last_y] - eax - ebx
+    end
+    mov [last_x] - eax
+    mov [last_y] - ebx
+end
+
+; line: отрезок от (eax, ebx) до (ecx, edx) — алгоритм Брезенхема
+proc line - eax - ebx - ecx - edx uses esi - edi
+    local ddx - dword
+    local ddy - dword
+    local sx - dword
+    local sy - dword
+    local err - dword
+    mov edi - ecx                ; ddx = |x1 - x0|, sx — направление по x
+    sub edi - eax
+    mov [sx] - 1
+    if signed edi < 0
+        neg edi
+        mov [sx] - -1
+    end
+    mov [ddx] - edi
+    mov edi - edx                ; ddy = -|y1 - y0|, sy — направление по y
+    sub edi - ebx
+    mov [sy] - 1
+    if signed edi < 0
+        neg edi
+        mov [sy] - -1
+    end
+    neg edi
+    mov [ddy] - edi
+    add edi - [ddx]
+    mov [err] - edi
+    while 1
+        call brush - eax - ebx
+        break if eax = ecx and ebx = edx
+        mov edi - [err]
+        shl edi - 1              ; e2 = 2 * err
+        if signed edi >= [ddy]
+            mov esi - [ddy]
+            add [err] - esi
+            add eax - [sx]
+        end
+        if signed edi <= [ddx]
+            mov esi - [ddx]
+            add [err] - esi
+            add ebx - [sy]
+        end
+    end
+end
+
+; brush: квадрат 3x3 цветом ink с центром (eax, ebx) — только внутри холста
+proc brush - eax - ebx uses ecx - edx - esi - edi
+    for signed edx - -1 - 2
+        lea edi - [ebx+edx]      ; строка
+        continue if signed edi < CANVAS_Y or edi >= TOOLS_Y
+        imul edi - edi - GFX_W
+        for signed ecx - -1 - 2
+            lea esi - [eax+ecx]  ; столбец
+            continue if esi >= GFX_W
+            add esi - edi
+            push eax
+            mov al - [ink]
+            mov [GFX+esi] - al
+            pop eax
+        end
+    end
+end
+
+; cursor_on / cursor_off: курсор-крестик. Цвета точек меняются через xor,
+; поэтому второй рисунок в той же точке возвращает картинку как была.
+proc cursor_on
+    call cursor_xor - [mx] - [my]
+    mov eax - [mx]
+    mov [cur_x] - eax
+    mov eax - [my]
+    mov [cur_y] - eax
+end
+
+proc cursor_off
+    return if signed dword [cur_x] < 0
+    call cursor_xor - [cur_x] - [cur_y]
+    mov dword [cur_x] - -1
+end
+
+proc cursor_xor - eax - ebx uses ecx - esi - edi
+    for signed ecx - -3 - 4
+        lea esi - [eax+ecx]      ; горизонтальная черта
+        mov edi - ebx
+        call xor_pixel
+        mov esi - eax            ; вертикальная (без центра — он уже инвертирован)
+        lea edi - [ebx+ecx]
+        call xor_pixel if ecx != 0
+    end
+end
+
+proc xor_pixel - esi - edi uses edi
+    return if esi >= GFX_W or edi >= GFX_H
+    imul edi - edi - GFX_W
+    xor byte [GFX+edi+esi] - 0x0F
+end
+
+proc clear_canvas
+    rect 0 - CANVAS_Y - GFX_W - TOOLS_Y-CANVAS_Y - WHITE
+    mov dword [cur_x] - -1             ; курсор стёрт вместе с холстом
+end
+
+; draw_tools: палитра; над выбранным цветом — белая полоска
+proc draw_tools uses ecx
+    rect 0 - TOOLS_Y - GFX_W - 4 - 8
+    mov eax - [color]
+    imul eax - eax - 20
+    rect eax - TOOLS_Y - 20 - 4 - WHITE
+    for ecx - 0 - 16
+        imul eax - ecx - 20
+        rect eax - TOOLS_Y+4 - 20 - 12 - ecx
+    end
+end
+
+pool

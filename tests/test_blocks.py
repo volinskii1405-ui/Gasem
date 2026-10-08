@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from gasem import GasemErrors, compile_source
+from gasem import GasemErrors, compile_file, compile_source
 
 from test_highlevel import dword, run, run_symbols, unicorn
 
@@ -283,6 +283,45 @@ class AtTest(unittest.TestCase):
         res = compile_source("og 0x7C00\nat 0x9000\nnop\nend\n")
         self.assertIn("00009000  90", res.listing)
         self.assertEqual(res.lines[0][0], 0x9000)
+
+
+class IncprogTest(unittest.TestCase):
+    def write(self, tmp, name, text):
+        with open(os.path.join(tmp, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_separate_program_with_own_origin_and_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "app.gsm", "og 0x50000\nb 32\nstart: jmp start\n    mov eax - start\n")
+            res = compile_source('og 0x7C00\nstart: nop\napp: incprog "app.gsm"\napp_end:\nw: app_end-app\n',
+                                 base_dir=tmp)
+            app = bytes([0xEB, 0xFE, 0xB8, 0x00, 0x00, 0x05, 0x00])
+            self.assertEqual(res.code, b"\x90" + app + bytes([len(app), 0]))
+            self.assertEqual(res.symbols["start"], 0x7C00)      # имена программы не смешиваются
+
+    def test_errors_and_warnings_come_from_the_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "bad.gsm", "nop\nmov ax - [bx + cl]\n")
+            self.write(tmp, "warn.gsm", "start: nop\nunused: nop\n")
+            self.write(tmp, "self.gsm", 'incprog "self.gsm"\n')
+            errs = errors_in(tmp, 'incprog "bad.gsm"\n')
+            self.assertEqual(len(errs), 1)
+            self.assertIn("bad.gsm:2: ошибка: регистр cl нельзя использовать в адресе", errs[0])
+            res = compile_source('incprog "warn.gsm"\n', base_dir=tmp)
+            self.assertIn("метка 'unused' нигде не используется", res.warnings[0].format())
+            with self.assertRaises(GasemErrors) as cm:
+                compile_file(os.path.join(tmp, "self.gsm"))
+            self.assertIn("собирает саму себя через incprog", cm.exception.errors[0].format())
+            self.assertIn("не удалось открыть файл", errors_in(tmp, 'incprog "nope.gsm"\n')[0])
+            self.assertIn("&&", errors_in(tmp, '&& 2 incprog "warn.gsm"\n')[0])
+
+
+def errors_in(tmp, src):
+    try:
+        compile_source(src, base_dir=tmp)
+    except GasemErrors as e:
+        return [x.format() for x in e.errors]
+    raise AssertionError("ожидалась ошибка:\n" + src)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,209 @@
+; =====================================================================
+;  Программы с диска и задачи: run, ps, kill, beep.
+;
+;  Программа — файл, собранный с sdk.gsm (начинается с "GAPP").
+;  Запускается по имени: «edit note.txt» найдёт файл edit или edit.bin.
+;  & в конце строки — запустить в фоне: «music &».
+;  Ctrl+C завершает программу, которую ждёт оболочка.
+; =====================================================================
+
+b 32
+BIN_EXT = 0x6E69622E             ; ".bin" одним двойным словом
+
+; ---- run <программа> [аргументы] [&]
+cmd_run:
+    call need_fs
+    ret if carry
+    mov edi - name_buf
+    call get_name
+    if carry
+        jmp puts - "Usage: run <program> [arguments] [&]\n"
+    end
+    call find_program
+    jmp not_found if carry
+    jmp start_program
+
+; try_program: первое слово строки esi — программа на диске? Тогда запустить.
+;              CF=1 — такой программы нет (ничего не сделано)
+try_program:
+    pushad
+    cmp byte [fs_ready] - 0
+    jfe .no
+    mov edi - name_buf
+    call get_name
+    jfc .no
+    call find_program
+    jfc .no
+    call start_program
+    popad
+    clc
+    ret
+.no:
+    popad
+    stc
+    ret
+
+; find_program: найти файл name_buf, а если его нет — name_buf с «.bin».
+;               CF=0 — найден, edi = запись каталога
+find_program:
+    push ecx - esi
+    mov esi - name_buf
+    call fs_find
+    jfnc .done
+    xor ecx - ecx                ; длина имени
+    while byte [name_buf+ecx] != 0
+        inc ecx
+    end
+    stc
+    jmp .done if ecx > NAME_MAX-4
+    mov dword [name_buf+ecx] - BIN_EXT
+    mov byte [name_buf+ecx+4] - 0
+    call fs_find
+    if carry
+        mov byte [name_buf+ecx] - 0   ; вернуть имя, как было (CF не меняется)
+    end
+.done:
+    pop ecx - esi
+    ret
+
+; start_program: загрузить программу (edi — запись каталога) и запустить
+;                с аргументами esi; & в конце аргументов — в фоне
+start_program:
+    pushad
+    xor ebp - ebp                ; 1 — в фоне
+    mov ebx - esi                ; ebx → конец аргументов без пробелов
+    while byte [ebx] != 0
+        inc ebx
+    end
+    call .trim
+    if ebx > esi and byte [ebx-1] = '&'
+        mov ebp - 1
+        dec ebx
+        call .trim
+    end
+    mov byte [ebx] - 0
+    call fs_load                 ; → FILE_BUF, ecx = размер
+    mov eax - err_io
+    jfc .error
+    mov edx - esi                ; аргументы
+    mov esi - edi                ; имя — из каталога
+    call spawn
+    jfc .error
+    if ebp = 0
+        call run_wait
+    else
+        push esi
+        push eax
+        mov al - '['
+        call putc
+        pop eax
+        call print_dec
+        call puts - "] "
+        pop esi
+        call puts                ; имя программы
+        call puts - " started in the background\n"
+    end
+    popad
+    ret
+.error:
+    call fs_error
+    popad
+    ret
+.trim:
+    while ebx > esi and byte [ebx-1] = ' '
+        dec ebx
+    end
+    ret
+
+; run_wait: ждать, пока завершится программа eax (она — на переднем плане)
+run_wait:
+    pushad
+    mov bl - [cur_attr]
+    mov [fg_task] - eax
+    imul eax - eax - Task.size
+    mov ecx - 1
+    while byte [tasks+eax+Task.state] != TASK_FREE
+        call sleep
+    end
+    mov dword [fg_task] - 0
+    mov [cur_attr] - bl          ; цвет и курсор — как были у оболочки
+    call cursor_show
+    call newline if dword [cur_col] != 0
+    popad
+    ret
+
+; ---- ps: список задач
+cmd_ps:
+    pushad
+    call puts_attr - "  ID  STATE   PROGRAM\n" - 0x0F
+    for ecx - 0 - MAX_TASKS
+        imul ebx - ecx - Task.size
+        add ebx - tasks
+        if byte [ebx+Task.state] != TASK_FREE
+            mov eax - ecx
+            push ecx
+            mov ecx - 4
+            call print_dec_w
+            pop ecx
+            mov esi - st_run
+            if ecx != [cur_task]
+                mov esi - st_ready
+                mov eax - [ticks]
+                mov esi - st_sleep if eax < [ebx+Task.wake]
+            end
+            call puts
+            lea esi - [ebx+Task.name]
+            call puts
+            if byte [ebx+Task.args] != 0
+                mov al - ' '
+                call putc
+                lea esi - [ebx+Task.args]
+                call puts
+            end
+            call newline
+        end
+    end
+    popad
+    ret
+
+st_run   s: "  run     "
+st_ready s: "  ready   "
+st_sleep s: "  sleep   "
+
+; ---- kill <номер>
+cmd_kill:
+    call parse_num
+    jfc .usage
+    mov ecx - eax
+    jmp .usage if ecx = 0 or ecx >= MAX_TASKS
+    imul eax - ecx - Task.size
+    if byte [tasks+eax+Task.state] = TASK_FREE
+        jmp puts - "No such task.\n"
+    end
+    call task_kill
+    mov eax - ecx
+    call puts - "Task "
+    call print_dec
+    jmp puts - " stopped.\n"
+.usage:
+    jmp puts - "Usage: kill <task id> (see 'ps'). Task 0 is the shell itself.\n"
+
+; ---- beep [частота] [миллисекунды]
+cmd_beep:
+    pushad
+    mov ebx - 880                ; ля второй октавы
+    mov ecx - 20                 ; 200 мс
+    call parse_num
+    if not carry
+        mov ebx - eax
+        call skip_spaces
+        call parse_num
+        if not carry
+            let ecx - "(eax + 9) / 10"
+        end
+    end
+    call sound_on
+    call sleep
+    call sound_off
+    popad
+    ret

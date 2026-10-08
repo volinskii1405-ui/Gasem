@@ -22,7 +22,7 @@ MNEMONICS = sorted(x86.MNEMONICS | set(x86.ALIASES), key=lambda m: (-len(m), m))
 REGISTERS = sorted(x86.REGISTERS, key=lambda r: (-len(r), r))
 PREFIXES = sorted(set(x86.PREFIXES) | set(x86.SEG_PREFIX))
 CONTROL = sorted(CONTROL_WORDS - {"let"} | {"signed"} | BLOCK_WORDS)
-DIRECTIVES = ["og", "align", "include", "incbin", "pool", "args", "equ"]
+DIRECTIVES = ["og", "align", "include", "incbin", "incprog", "pool", "args", "equ"]
 SIZES = ["byte", "word", "dword", "qword", "short", "near", "far", "rel", "abs"]
 
 ID = r"[A-Za-z_.\p{L}][\w.\p{L}]*"

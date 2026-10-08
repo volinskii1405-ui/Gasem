@@ -1,0 +1,294 @@
+; =====================================================================
+;  Задачи (вытесняющая многозадачность) и страничная память.
+;
+;  Задача 0 — ядро с оболочкой, задачи 1..7 — программы с диска.
+;  Таймер 100 раз в секунду прерывает текущую задачу и отдаёт процессор
+;  следующей готовой (по кругу). Если готовых нет, работает задача
+;  простоя: hlt до следующего прерывания.
+;
+;  Страничная память: страницы по 4 МБ (PSE). У каждой задачи свой
+;  каталог страниц: вся память отображается как есть, кроме окна
+;  APP_BASE (4..8 МБ) — оно указывает на собственные 4 МБ задачи.
+;  Поэтому все программы собираются с og APP_BASE и не мешают друг другу.
+; =====================================================================
+
+b 32
+MAX_TASKS  = 8
+TASK_FREE  = 0
+TASK_READY = 1
+TASK_STACK = 0x8000              ; 32 КБ стека на задачу (вершина: STACK_TOP - номер*TASK_STACK)
+PAGE_4M    = 0x83                ; элемент каталога: страница 4 МБ, есть, можно писать
+
+struct Task
+    state: b                     ; TASK_FREE или TASK_READY
+    pad:   b 3
+    esp:   d                     ; сохранённый esp: в стеке лежат pushad и кадр iret
+    cr3:   d                     ; каталог страниц
+    wake:  d                     ; не запускать раньше этого тика (sleep)
+    name:  b 24
+    args:  b 80                  ; строка аргументов программы
+end
+
+tasks:    && MAX_TASKS+1 Task    ; последняя — задача простоя
+IDLE_TASK = tasks+MAX_TASKS*Task.size
+cur_task  d: 0                   ; номер текущей задачи
+fg_task   d: 0                   ; программа, завершения которой ждёт оболочка (0 — нет)
+kill_fg   b: 0                   ; Ctrl+C: завершить fg_task на ближайшем тике
+mem_mb    d: 0                   ; объём памяти в мегабайтах
+
+; tasks_init: каталоги страниц, включение страничной памяти, задачи 0 и простоя
+tasks_init:
+    pushad
+    call mem_size
+    mov [mem_mb] - eax
+    for ebx - 0 - MAX_TASKS
+        let edi - "ebx*4096 + PD_BASE"
+        let edx - "ebx*Task.size + tasks"
+        mov [edx+Task.cr3] - edi
+        for ecx - 0 - 1024       ; все 4 ГБ — как есть
+            let eax - "ecx << 22 | PAGE_4M"
+            mov [edi+ecx*4] - eax
+        end
+        if ebx != 0              ; окно APP_BASE (элемент 1) — свои 4 МБ задачи
+            call task_frame_addr
+            or eax - PAGE_4M
+            mov [edi+4] - eax
+        end
+    end
+    mov eax - cr4
+    or eax - 0x10                ; PSE: страницы по 4 МБ
+    mov cr4 - eax
+    mov eax - PD_BASE            ; каталог задачи 0
+    mov cr3 - eax
+    mov eax - cr0
+    or eax - 0x80000000          ; PG: включить страничную память
+    mov cr0 - eax
+
+    mov byte [tasks+Task.state] - TASK_READY
+    mov esi - s_shell_task
+    mov edi - tasks+Task.name
+    mov ecx - NAME_MAX
+    call copy_str
+
+    mov edi - IDLE_STACK         ; задача простоя
+    mov eax - idle_loop
+    xor esi - esi
+    call task_frame
+    mov [IDLE_TASK+Task.esp] - edi
+    mov dword [IDLE_TASK+Task.cr3] - PD_BASE
+    mov byte [IDLE_TASK+Task.state] - TASK_READY
+    popad
+    ret
+
+s_shell_task s: "shell"
+
+idle_loop:
+    hlt
+    jmp idle_loop
+
+; task_frame_addr: физический адрес памяти задачи ebx → eax
+task_frame_addr:
+    let eax - "ebx*APP_SIZE + (APP_FRAMES - APP_SIZE)"
+    ret
+
+; task_frame: стек новой задачи с вершиной edi так, будто её прервал таймер:
+;             pushad (esi = аргументы) и кадр iret на точку входа eax.
+;             Из точки входа можно выйти через ret — попадёте в task_exit.
+;             → edi = начальный esp
+task_frame:
+    sub edi - 48
+    push eax - ecx - edi
+    mov ecx - 12
+    xor eax - eax
+    cld
+    rep stosd
+    pop eax - ecx - edi
+    mov [edi+4] - esi            ; esi в кадре pushad
+    mov [edi+32] - eax           ; eip
+    mov dword [edi+36] - CODE_SEL
+    mov dword [edi+40] - 0x202   ; eflags: прерывания разрешены
+    mov dword [edi+44] - task_exit
+    ret
+
+; ---------------------------------------------------------------------
+;  Переключение задач. Вход — из таймера (irq0_timer) и из int 0x81
+;  (yield): в стеке текущей задачи уже лежат кадр прерывания и pushad.
+; ---------------------------------------------------------------------
+irq_yield:
+    pushad
+switch_task:
+    mov eax - [cur_task]
+    imul ebx - eax - Task.size
+    mov [tasks+ebx+Task.esp] - esp
+    if byte [kill_fg] != 0       ; Ctrl+C
+        mov byte [kill_fg] - 0
+        mov ecx - [fg_task]
+        call task_kill if ecx != 0
+    end
+    mov ecx - MAX_TASKS          ; следующая готовая задача по кругу
+.next:
+    inc eax
+    if eax >= MAX_TASKS
+        xor eax - eax
+    end
+    imul ebx - eax - Task.size
+    if byte [tasks+ebx+Task.state] = TASK_READY
+        mov edx - [ticks]
+        cmp edx - [tasks+ebx+Task.wake]
+        jfae .found
+    end
+    loop .next
+    mov eax - MAX_TASKS          ; все спят — задача простоя
+    mov ebx - MAX_TASKS*Task.size
+.found:
+    mov [cur_task] - eax
+    mov esp - [tasks+ebx+Task.esp]
+    mov eax - [tasks+ebx+Task.cr3]
+    mov cr3 - eax
+    popad
+    iretd
+
+; sleep: спать ecx тиков (в это время работают другие задачи)
+sleep:
+    push eax - ebx
+    mov eax - [ticks]
+    add eax - ecx
+    mov ebx - [cur_task]
+    imul ebx - ebx - Task.size
+    mov [tasks+ebx+Task.wake] - eax
+    int 0x81
+    pop eax - ebx
+    ret
+
+; ---------------------------------------------------------------------
+;  Запуск и завершение программ
+; ---------------------------------------------------------------------
+
+; spawn: запустить программу из FILE_BUF (ecx байт). esi — имя, edx — аргументы.
+;        → eax = номер задачи; CF=1 — не получилось, eax = текст ошибки.
+spawn:
+    push ebx - ecx - edx - esi - edi - ebp
+    mov eax - err_not_program
+    cmp ecx - 8
+    jfb .fail
+    cmp dword [FILE_BUF] - APP_MAGIC
+    jfne .fail
+    mov ebx - [FILE_BUF+4]       ; main должна лежать внутри программы
+    sub ebx - APP_BASE
+    cmp ebx - ecx
+    jfae .fail
+    mov ebx - 1                  ; свободное место для задачи
+.slot:
+    mov eax - err_no_tasks
+    cmp ebx - MAX_TASKS
+    jfae .fail
+    imul ebp - ebx - Task.size
+    add ebp - tasks              ; ebp = структура задачи
+    cmp byte [ebp+Task.state] - TASK_FREE
+    jfe .found
+    inc ebx
+    jmp .slot
+.found:
+    let eax - "ebx*4 + APP_FRAMES/0x100000"
+    cmp eax - [mem_mb]           ; конец памяти задачи (в МБ) — в пределах ОЗУ?
+    mov eax - err_no_memory
+    jfa .fail
+
+    push ecx - esi               ; память задачи: нули, затем файл программы
+    call task_frame_addr
+    mov edi - eax
+    mov ecx - APP_SIZE/4
+    xor eax - eax
+    cld
+    rep stosd
+    call task_frame_addr
+    mov edi - eax
+    pop ecx - esi
+    push esi
+    mov esi - FILE_BUF
+    rep movsb
+    pop esi
+
+    lea edi - [ebp+Task.name]    ; имя и аргументы
+    mov ecx - NAME_MAX
+    call copy_str
+    mov esi - edx
+    lea edi - [ebp+Task.args]
+    mov ecx - 79
+    call copy_str
+
+    let edi - "STACK_TOP - ebx*TASK_STACK"
+    mov eax - [FILE_BUF+4]
+    lea esi - [ebp+Task.args]
+    call task_frame
+    mov [ebp+Task.esp] - edi
+    mov dword [ebp+Task.wake] - 0
+    mov byte [ebp+Task.state] - TASK_READY   ; с этого момента задача работает
+    mov eax - ebx
+    pop ebx - ecx - edx - esi - edi - ebp
+    clc
+    ret
+.fail:
+    pop ebx - ecx - edx - esi - edi - ebp
+    stc
+    ret
+
+; task_kill: завершить задачу ecx. Если у неё был графический режим или звук,
+;            вернуть текстовый режим и выключить звук.
+task_kill:
+    pushad
+    pushfd
+    cli
+    imul ebx - ecx - Task.size
+    mov byte [tasks+ebx+Task.state] - TASK_FREE
+    call gfx_off if ecx = [gfx_owner]
+    call sound_off if ecx = [sound_owner]
+    popfd
+    popad
+    ret
+
+; task_exit: сюда попадает ret из main и системный вызов SYS_EXIT
+task_exit:
+    cli
+    mov ecx - [cur_task]
+    call task_kill
+    int 0x81                     ; в эту задачу управление больше не вернётся
+
+; copy_str: строку esi → в edi, не больше ecx символов, с нулём в конце
+copy_str:
+    push eax - ecx - esi - edi
+    while ecx != 0 and byte [esi] != 0
+        nxtb
+        stosb
+        dec ecx
+    end
+    mov byte [edi] - 0
+    pop eax - ecx - esi - edi
+    ret
+
+; mem_size: объём памяти в мегабайтах (из CMOS, как его сообщает BIOS) → eax
+mem_size:
+    mov al - 0x35                ; память выше 16 МБ, блоками по 64 КБ
+    call cmos_read
+    mov ah - al
+    mov al - 0x34
+    call cmos_read
+    movzx eax - ax
+    if eax != 0
+        shr eax - 4              ; 64 КБ * 16 = 1 МБ
+        add eax - 16
+        ret
+    end
+    mov al - 0x31                ; память выше 1 МБ, в килобайтах
+    call cmos_read
+    mov ah - al
+    mov al - 0x30
+    call cmos_read
+    movzx eax - ax
+    shr eax - 10
+    inc eax
+    ret
+
+err_not_program s: "not a GasemOS program"
+err_no_tasks    s: "too many programs are running (max 7)"
+err_no_memory   s: "not enough memory"

@@ -5,14 +5,14 @@ import os
 from . import nodes as N
 from . import x86
 from . import hints
-from .errors import GasemError, GasemWarning, SourceLoc
+from .errors import GasemError, GasemErrors, GasemWarning, SourceLoc
 from .highlevel import CONTROL_WORDS, HighLevel, family
 from .lexer import Token, tokenize, NUM, STR, ID, OP, SEP
 
 DATA_UNITS = {"b": 1, "w": 2, "d": 4, "q": 8, "s": 1}   # s: — строка с нулём в конце
 SIZE_WORDS = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "b": 8, "w": 16, "d": 32, "q": 64}
 JUMP_WORDS = {"short", "near", "far"}
-DIRECTIVES = {"og", "align", "incbin", "include", "do", "equ", "pool", "args"}
+DIRECTIVES = {"og", "align", "incbin", "incprog", "include", "do", "equ", "pool", "args"}
 BLOCK_WORDS = {"macro", "proc", "struct", "at", "local", "return"}
 RESERVED = (set(x86.REGISTERS) | set(SIZE_WORDS) | JUMP_WORDS | {"a20", "s", "rel", "abs"} | DIRECTIVES
             | BLOCK_WORDS)
@@ -249,6 +249,7 @@ class Parser:
         self.macro_counter = 0
         self.macro_lines = 0
         self.structs = {}         # имя -> Struct
+        self.programs = ()        # программы, которые собирают эту через incprog
 
     # ------------------------------------------------ файлы
 
@@ -505,6 +506,15 @@ class Parser:
                 data = data[vals[0]:]
             if len(vals) > 1:
                 data = data[:vals[1]]
+            return self._finish(N.IncbinStmt(data, loc), emit)
+
+        if word == "incprog":
+            if not emit:
+                ts.error("incprog нельзя повторять через &&")
+            ts.next()
+            path = self.parse_path(ts, "incprog")
+            ts.expect_end()
+            data = self.compile_program(self.resolve_path(path, base_dir), path, loc)
             return self._finish(N.IncbinStmt(data, loc), emit)
 
         if word == "do":
@@ -997,6 +1007,30 @@ class Parser:
         if emit:
             self.emit(st)
         return st
+
+    def compile_program(self, full, path, loc):
+        """incprog: собрать отдельную программу (со своим og и своими именами) → байты.
+        Её ошибки и предупреждения добавляются к ошибкам этой программы."""
+        from .assembler import Assembler
+        chain = self.programs + tuple(self.include_stack[:1])
+        if os.path.abspath(full) in chain:
+            raise GasemError(f"программа '{path}' собирает саму себя через incprog", loc)
+        if len(chain) >= self.MAX_INCLUDE_DEPTH:
+            raise GasemError("слишком глубокая вложенность incprog", loc)
+        sub = Parser()
+        sub.programs = chain
+        sub.parse_file(full, loc)
+        sub.finish()
+        if sub.errors:
+            self.errors.extend(sub.errors)
+            return b""
+        try:
+            result = Assembler(sub).assemble()
+        except GasemErrors as e:
+            self.errors.extend(e.errors)
+            return b""
+        self.warnings.extend(sub.warnings)
+        return result.code
 
     def parse_path(self, ts, what):
         t = ts.peek()

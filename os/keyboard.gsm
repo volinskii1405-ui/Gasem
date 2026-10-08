@@ -1,17 +1,14 @@
 ; =====================================================================
 ;  Клавиатура PS/2: обработчик IRQ 1, перевод скан-кодов в символы,
-;  кольцевой буфер нажатий на 256 символов.
+;  кольцевой буфер нажатий на 256 символов. Коды клавиш — в abi.gsm.
+;  Ctrl+C завершает программу, которую ждёт оболочка.
 ; =====================================================================
 
 b 32
-KEY_UP    = 0x80                 ; коды стрелок (в буфере, вместо символов)
-KEY_DOWN  = 0x81
-KEY_LEFT  = 0x82
-KEY_RIGHT = 0x83
-
 kb_head  b: 0                    ; куда класть следующий символ
 kb_tail  b: 0                    ; откуда брать следующий символ
 kb_shift b: 0
+kb_ctrl  b: 0
 kb_caps  b: 0
 kb_e0    b: 0                    ; был префикс 0xE0 (расширенная клавиша)
 kb_buf   b-256
@@ -35,6 +32,10 @@ irq1_keyboard:
     jfe .shift_up
     cmp al - 0xB6                ; правый Shift отпущен
     jfe .shift_up
+    cmp al - 0x1D                ; Ctrl нажат
+    jfe .ctrl_down
+    cmp al - 0x9D                ; Ctrl отпущен
+    jfe .ctrl_up
     cmp al - 0x3A                ; Caps Lock
     jfe .caps
     chk al - 0x80                ; отпускание клавиши — пропускаем
@@ -50,6 +51,17 @@ irq1_keyboard:
         or ah - 0x20
         if ah >= 'a' and ah <= 'z'
             xor al - 0x20
+        end
+    end
+    if byte [kb_ctrl] != 0       ; Ctrl+буква → 1..26
+        mov ah - al
+        or ah - 0x20
+        if ah >= 'a' and ah <= 'z'
+            and al - 0x1F
+            if al = 3 and dword [fg_task] != 0
+                mov byte [kill_fg] - 1   ; Ctrl+C: завершить программу
+                jmp .eoi
+            end
         end
     end
 .put:
@@ -68,26 +80,38 @@ irq1_keyboard:
 .shift_up:
     mov byte [kb_shift] - 0
     jmp .eoi
+.ctrl_down:
+    mov byte [kb_ctrl] - 1
+    jmp .eoi
+.ctrl_up:
+    mov byte [kb_ctrl] - 0
+    jmp .eoi
 .caps:
     xor byte [kb_caps] - 1
     jmp .eoi
-.extended:                       ; стрелки: E0 48 / E0 50 / E0 4B / E0 4D
+.extended:                       ; клавиши с префиксом E0: стрелки, Home, End ...
     mov byte [kb_e0] - 0
-    mov ah - KEY_UP
-    cmp al - 0x48
-    jfe .arrow
-    mov ah - KEY_DOWN
-    cmp al - 0x50
-    jfe .arrow
-    mov ah - KEY_LEFT
-    cmp al - 0x4B
-    jfe .arrow
-    mov ah - KEY_RIGHT
-    cmp al - 0x4D
-    jfne .eoi
-.arrow:
-    mov al - ah
+    cmp al - 0x1D                ; правый Ctrl
+    jfe .ctrl_down
+    cmp al - 0x9D
+    jfe .ctrl_up
+    mov esi - ext_keys
+.find:
+    mov ah - [esi]
+    chk ah - ah
+    jfz .eoi                     ; такой клавиши нет в таблице
+    cmp al - ah
+    jfe .found
+    add esi - 2
+    jmp .find
+.found:
+    mov al - [esi+1]
     jmp .put
+
+ext_keys:                        ; скан-код после E0 - код клавиши
+    b: 0x48 - KEY_UP - 0x50 - KEY_DOWN - 0x4B - KEY_LEFT - 0x4D - KEY_RIGHT
+    b: 0x47 - KEY_HOME - 0x4F - KEY_END - 0x49 - KEY_PGUP - 0x51 - KEY_PGDN
+    b: 0x53 - KEY_DEL - 0
 
 ; kb_push: положить символ al в буфер (0 — не кладём, полный буфер — теряем)
 kb_push:
@@ -107,26 +131,30 @@ kb_push:
 ; kb_poll: взять символ без ожидания. ZF=1 — буфер пуст, иначе символ в al.
 kb_poll:
     push ebx
+    pushfd
     cli
     movzx ebx - byte [kb_tail]
     cmp bl - [kb_head]
     jfe .empty
     mov al - [kb_buf+ebx]
     inc byte [kb_tail]
-    sti
+    popfd
     or ebx - 1                   ; ZF=0: символ есть
     pop ebx
     ret
 .empty:
-    sti
+    popfd
+    xor ebx - ebx                ; ZF=1
     pop ebx
     ret
 
-; getchar: дождаться нажатия, символ → al
+; getchar: дождаться нажатия, символ → al. Пока клавиш нет, задача спит
+;          и процессор достаётся другим задачам.
 getchar:
     call kb_poll
-    jfnz .done
-    hlt                          ; спим до следующего прерывания
+    ret if not zero
+    push ecx
+    mov ecx - 1
+    call sleep
+    pop ecx
     jmp getchar
-.done:
-    ret

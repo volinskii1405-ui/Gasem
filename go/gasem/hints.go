@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-var directiveWords = []string{"og", "align", "include", "incbin", "do", "pool", "args", "equ",
+var directiveWords = []string{"og", "align", "include", "incbin", "incprog", "do", "pool", "args", "equ",
 	"if", "elif", "else", "end", "while", "for", "repeat", "until",
 	"break", "continue", "let", "macro", "proc", "struct", "at", "local", "return"}
 

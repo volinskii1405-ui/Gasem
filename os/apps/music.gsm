@@ -1,0 +1,69 @@
+; =====================================================================
+;  Мелодия через PC-динамик: «Ода к радости» Бетховена.
+;      music            играть (Ctrl+C — остановить)
+;      music &          играть в фоне, пока работаете в оболочке
+; =====================================================================
+
+include "../sdk.gsm"
+
+C4 = 262                         ; частоты нот, Гц
+D4 = 294
+E4 = 330
+F4 = 349
+G4 = 392
+BEAT = 30                        ; четверть — 0.3 с (в тиках по 10 мс)
+
+macro note - hz - len            ; нота в таблице: частота и длительность
+    w: hz - len
+end
+
+main:
+    print "Playing 'Ode to Joy' (L. van Beethoven)...\n"
+    mov esi - melody
+    while word [esi] != 0
+        movzx ebx - word [esi]
+        movzx ecx - word [esi+2]
+        sound ebx
+        sub ecx - 3
+        sleep ecx
+        nosound                  ; короткая пауза, чтобы ноты не сливались
+        sleep 3
+        add esi - 4
+    end
+    print "Done.\n"
+    ret
+
+melody:
+    note E4 - BEAT
+    note E4 - BEAT
+    note F4 - BEAT
+    note G4 - BEAT
+    note G4 - BEAT
+    note F4 - BEAT
+    note E4 - BEAT
+    note D4 - BEAT
+    note C4 - BEAT
+    note C4 - BEAT
+    note D4 - BEAT
+    note E4 - BEAT
+    note E4 - BEAT*3/2
+    note D4 - BEAT/2
+    note D4 - BEAT*2
+    note E4 - BEAT
+    note E4 - BEAT
+    note F4 - BEAT
+    note G4 - BEAT
+    note G4 - BEAT
+    note F4 - BEAT
+    note E4 - BEAT
+    note D4 - BEAT
+    note C4 - BEAT
+    note C4 - BEAT
+    note D4 - BEAT
+    note E4 - BEAT
+    note D4 - BEAT*3/2
+    note C4 - BEAT/2
+    note C4 - BEAT*2
+    w: 0
+
+pool

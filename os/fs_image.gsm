@@ -1,7 +1,20 @@
 ; =====================================================================
 ;  Начальное содержимое диска с GasemFS: суперблок, таблица блоков,
-;  каталог и два файла. Собирается компилятором Gasem вместе с системой.
+;  каталог и файлы. Программы из папки apps собираются компилятором
+;  Gasem прямо здесь (incprog) — каждая со своим og и своими именами.
+;  Блоки каждого файла идут подряд; макросы ниже считают их сами.
 ; =====================================================================
+
+macro chain - start - stop       ; таблица блоков: блок → следующий, последний → FAT_END
+    && (stop-start+511)/512-1 w: ($-fs_fat)/2+1
+    w: FAT_END
+end
+
+macro entry - name - start - stop  ; запись каталога: имя, размер, первый блок
+    b/ 24: name
+    d: stop-start
+    w: (start-fs_data)/512 - 0
+end
 
 ; ---- суперблок (сектор FS_START)
     b/ 8: "GASEMFS1"
@@ -10,42 +23,61 @@
     b-512-16
 
 ; ---- таблица блоков
+fs_fat:
     w: FAT_END                   ; блок 0 зарезервирован
-    w: FAT_END                   ; блок 1 — readme.txt (один блок)
-    w: FAT_END                   ; блок 2 — hello.gsm
-    w-FS_BLOCKS-3                ; остальные свободны
+    chain readme - readme_end
+    chain hello_src - hello_src_end
+    chain hello_bin - hello_bin_end
+    chain edit_bin - edit_bin_end
+    chain paint_bin - paint_bin_end
+    chain mandel_bin - mandel_bin_end
+    chain music_bin - music_bin_end
+    chain ticker_bin - ticker_bin_end
+    w-FS_BLOCKS-($-fs_fat)/2     ; остальные блоки свободны
 
-; ---- каталог: имя (24 байта) - размер - первый блок
-    b/ 24: "readme.txt"
-    d: readme_end-readme
-    w: 1 - 0
-    b/ 24: "hello.gsm"
-    d: hello_end-hello
-    w: 2 - 0
-    b-(FS_ENTRIES-2)*32
+; ---- каталог
+fs_dir:
+    entry "readme.txt" - readme - readme_end
+    entry "hello.gsm" - hello_src - hello_src_end
+    entry "hello.bin" - hello_bin - hello_bin_end
+    entry "edit.bin" - edit_bin - edit_bin_end
+    entry "paint.bin" - paint_bin - paint_bin_end
+    entry "mandel.bin" - mandel_bin - mandel_bin_end
+    entry "music.bin" - music_bin - music_bin_end
+    entry "ticker.bin" - ticker_bin - ticker_bin_end
+    b-FS_ENTRIES*32-($-fs_dir)
 
 ; ---- блоки данных
+fs_data:
     b-512                        ; блок 0
 
-readme:                          ; блок 1
+readme:
     b: "Welcome to GasemOS!" - 10
     b: 10
     b: "This disk has a file system - GasemFS. Files survive a reboot." - 10
-    b: "Try these commands:" - 10
     b: 10
+    b: "Files:" - 10
     b: "  ls                          list files" - 10
     b: "  cat hello.gsm               show a file" - 10
     b: "  write note.txt Hello!       create a file" - 10
-    b: "  append note.txt More text   add a line" - 10
-    b: "  cp note.txt copy.txt        copy a file" - 10
-    b: "  mv copy.txt old.txt         rename a file" - 10
-    b: "  rm old.txt                  delete a file" - 10
+    b: "  edit note.txt               edit it (Ctrl+S save, Ctrl+Q quit)" - 10
+    b: "  cp, mv, rm, append          copy, rename, delete, add a line" - 10
     b: 10
-    b: "The whole system, this file system included, is written in Gasem." - 10
+    b: "Programs (*.bin files, run them by name):" - 10
+    b: "  hello Gasem                 your first program" - 10
+    b: "  paint                       draw with the mouse in 320x200 graphics" - 10
+    b: "  mandel                      the Mandelbrot set" - 10
+    b: "  music                       a melody on the PC speaker" - 10
+    b: "  ticker &                    '&' runs a program in the background" - 10
+    b: "  ps, kill 1                  list tasks, stop task 1" - 10
+    b: "  beep 440 500                a 440 Hz sound for half a second" - 10
+    b: 10
+    b: "Ctrl+C stops the program you are waiting for." - 10
+    b: "The whole system, its programs included, is written in Gasem." - 10
 readme_end:
-    b-512-(readme_end-readme)    ; файл должен поместиться в один блок
+    align 512 - 0
 
-hello:                           ; блок 2: загрузчик из документации Gasem
+hello_src:                       ; загрузчик из документации Gasem
     b: "; Hello world bootloader from the Gasem documentation" - 10
     b: "og 0x7C00" - 10
     b: "b 16" - 10
@@ -63,7 +95,26 @@ hello:                           ; блок 2: загрузчик из доку�
     b: "msg b: \"Hello\" - 0" - 10
     b: "&& 510-($-$$) b: 0" - 10
     b: "w: 0xAA55" - 10
-hello_end:
-    b-512-(hello_end-hello)
+hello_src_end:
+    align 512 - 0
 
-    b-(FS_BLOCKS-3)*512          ; свободные блоки
+hello_bin:  incprog "apps/hello.gsm"
+hello_bin_end:
+    align 512 - 0
+edit_bin:   incprog "apps/edit.gsm"
+edit_bin_end:
+    align 512 - 0
+paint_bin:  incprog "apps/paint.gsm"
+paint_bin_end:
+    align 512 - 0
+mandel_bin: incprog "apps/mandel.gsm"
+mandel_bin_end:
+    align 512 - 0
+music_bin:  incprog "apps/music.gsm"
+music_bin_end:
+    align 512 - 0
+ticker_bin: incprog "apps/ticker.gsm"
+ticker_bin_end:
+    align 512 - 0
+
+    b-FS_BLOCKS*512-($-fs_data)  ; свободные блоки

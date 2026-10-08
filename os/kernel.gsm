@@ -5,12 +5,17 @@
 
 b 32
 kernel_main:
+    call vga_init                ; запомнить шрифт и палитру для возврата из графики
     call clear_screen
     call status_init
     call idt_init
     call pic_init
     call pit_init
-    sti                          ; с этого момента работают таймер и клавиатура
+    call tasks_init              ; страничная память и задачи
+    call mouse_init
+    rdtsc                        ; зерно для случайных чисел
+    mov [rand_seed] - eax
+    sti                          ; с этого момента работают таймер, клавиатура и мышь
     call fs_init                 ; найти файловую систему на диске
 
     mov bl - 0x0B                ; голубой
@@ -40,11 +45,11 @@ disk_info:
     call fs_free_blocks
     let eax - "eax / 2"
     call print_dec
-    jmp puts - " KB free. Try 'ls' and 'cat readme.txt'.\n\n"
+    jmp puts - " KB free. Try 'ls', 'cat readme.txt' and 'hello'.\n\n"
 
 
 os_name    s: "GasemOS"
-os_version s: "0.1"
+os_version s: "0.2"
 
 logo:
     b: 10

@@ -24,7 +24,11 @@ from gasem import compile_file  # noqa: E402
 KEYS = {" ": "spc", "\n": "ret", "-": "minus", "=": "equal", "+": "shift-equal",
         "*": "shift-8", "/": "slash", "%": "shift-5", "!": "shift-1", ",": "comma",
         ".": "dot", "'": "apostrophe", ":": "shift-semicolon", "?": "shift-slash",
-        "\b": "backspace", "_": "shift-minus"}
+        "\b": "backspace", "_": "shift-minus", "&": "shift-7", "(": "shift-9", ")": "shift-0",
+        "[": "bracket_left", "]": "bracket_right", "{": "shift-bracket_left", "}": "shift-bracket_right",
+        ";": "semicolon", "<": "shift-comma", ">": "shift-dot", '"': "shift-apostrophe",
+        "#": "shift-3", "@": "shift-2", "$": "shift-4", "^": "shift-6", "\\": "backslash",
+        "|": "shift-backslash", "\t": "tab", "`": "grave_accent", "~": "shift-grave_accent"}
 
 
 class Qemu:
@@ -83,11 +87,23 @@ class Qemu:
 
     def screen_cells(self):
         """Видеобуфер построчно: пары байт (символ, цвет)."""
-        # путь относительный: в мониторе QEMU '/' читается как деление
-        self.cmd("pmemsave 0xb8000 4000 vga.bin")
-        with open(os.path.join(self.workdir, "vga.bin"), "rb") as f:
-            raw = f.read()
+        raw = self.memory(0xB8000, 4000)
         return [raw[r * 160:(r + 1) * 160] for r in range(25)]
+
+    def memory(self, addr, size):
+        """Прочитать физическую память машины."""
+        # путь относительный: в мониторе QEMU '/' читается как деление
+        self.cmd(f"pmemsave {addr:#x} {size} mem.bin")
+        with open(os.path.join(self.workdir, "mem.bin"), "rb") as f:
+            return f.read()
+
+    def mouse(self, dx=0, dy=0, buttons=None):
+        """Сдвинуть мышь и/или нажать кнопки (1 — левая, 2 — правая)."""
+        if dx or dy:
+            self.cmd(f"mouse_move {dx} {dy}")
+        if buttons is not None:
+            self.cmd(f"mouse_button {buttons}")
+        time.sleep(0.05)
 
     def screenshot(self, path):
         path = os.path.abspath(path)            # QEMU работает в своей временной папке
@@ -162,6 +178,58 @@ def play_snake(vm, seconds, target=10):
         time.sleep(0.03)
 
 
+class Pointer:
+    """Мышь в программе paint: QEMU двигает её относительно, а мы помним,
+    где она (координаты как в GasemOS: 0..319, 0..199, сначала — центр)."""
+
+    def __init__(self, vm):
+        self.vm, self.x, self.y = vm, 160, 100
+
+    def goto(self, x, y):
+        x, y = min(max(x, 0), 319), min(max(y, 0), 199)
+        while (self.x, self.y) != (x, y):
+            dx, dy = max(-12, min(12, x - self.x)), max(-12, min(12, y - self.y))
+            self.vm.mouse(dx, dy)
+            self.x, self.y = self.x + dx, self.y + dy
+
+    def stroke(self, points):
+        self.goto(*points[0])
+        self.vm.mouse(buttons=1)
+        for p in points[1:]:
+            self.goto(*p)
+        self.vm.mouse(buttons=0)
+
+    def pick(self, color):
+        """Щелчок по палитре внизу экрана."""
+        self.goto(color * 20 + 10, 194)
+        self.vm.mouse(buttons=1)
+        self.vm.mouse(buttons=0)
+
+
+def draw_house(vm):
+    import math
+    p = Pointer(vm)
+    p.pick(2)                                      # трава
+    p.stroke([(5, 172), (314, 172)])
+    p.stroke([(5, 176), (314, 176)])
+    p.pick(6)                                      # стены
+    p.stroke([(110, 170), (110, 112), (190, 112), (190, 170), (110, 170)])
+    p.pick(12)                                     # крыша
+    p.stroke([(98, 114), (150, 70), (202, 114), (98, 114)])
+    p.pick(1)                                      # дверь
+    p.stroke([(140, 170), (140, 138), (160, 138), (160, 170)])
+    p.pick(11)                                     # окно
+    p.stroke([(118, 124), (132, 124), (132, 136), (118, 136), (118, 124)])
+    p.stroke([(168, 124), (182, 124), (182, 136), (168, 136), (168, 124)])
+    p.pick(14)                                     # солнце
+    p.stroke([(265 + round(16 * math.cos(a * math.pi / 10)), 50 + round(14 * math.sin(a * math.pi / 10)))
+              for a in range(21)])
+    for a in range(0, 20, 3):
+        c, s = math.cos(a * math.pi / 10), math.sin(a * math.pi / 10)
+        p.stroke([(265 + round(21 * c), 50 + round(19 * s)), (265 + round(28 * c), 50 + round(25 * s))])
+    p.goto(300, 140)
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "screenshots")
     os.makedirs(out_dir, exist_ok=True)
@@ -211,6 +279,29 @@ def main():
             play_snake(vm, 40)
             shot(vm, "7-snake.png")
             vm.type("q")
+            time.sleep(0.5)
+            run(vm, ["clear", "ls", "hello Gasem", "ticker &", "music &", "ps"], pause=0.6)
+            shot(vm, "9-programs.png")
+            run(vm, ["kill 2", "clear", "edit note.txt"])
+            vm.key("end")
+            vm.key("down")
+            vm.key("end")
+            vm.type("\n\nGasemOS 0.2 runs programs from the disk:\n"
+                    "  edit    - this text editor\n  paint   - draw with the mouse\n"
+                    "  mandel  - the Mandelbrot set\n  music   - a melody on the PC speaker\n"
+                    "  ticker  - a background task\n\nCtrl+S saves the file, Ctrl+Q quits.", delay=0.03)
+            time.sleep(0.5)
+            shot(vm, "10-editor.png")
+            vm.key("ctrl-s")
+            vm.key("ctrl-q")
+            run(vm, ["paint"], pause=1.5)
+            draw_house(vm)
+            time.sleep(0.5)
+            shot(vm, "11-paint.png")
+            vm.key("esc")
+            run(vm, ["mandel"], pause=6)
+            shot(vm, "12-mandel.png")
+            vm.key("spc")
             time.sleep(0.5)
             run(vm, ["crash"])
             shot(vm, "8-exception.png")

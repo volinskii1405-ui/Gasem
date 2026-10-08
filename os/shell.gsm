@@ -62,6 +62,8 @@ execute:
     popad
     ret
 .unknown:
+    call try_program             ; программа на диске с таким именем?
+    jfnc .done
     mov bl - 0x0C
     push esi
     mov esi - msg_unknown
@@ -167,6 +169,10 @@ commands:
     d: s_mv - cmd_mv
     d: s_rm - cmd_rm
     d: s_format - cmd_format
+    d: s_run - cmd_run
+    d: s_ps - cmd_ps
+    d: s_kill - cmd_kill
+    d: s_beep - cmd_beep
     d: 0
 
 s_help     s: "help"
@@ -191,6 +197,10 @@ s_cp       s: "cp"
 s_mv       s: "mv"
 s_rm       s: "rm"
 s_format   s: "format"
+s_run      s: "run"
+s_ps       s: "ps"
+s_kill     s: "kill"
+s_beep     s: "beep"
 
 ; ---- help
 cmd_help:
@@ -207,12 +217,15 @@ help_text:
     b: "  color <1-15>  text color             mv <old> <new>        rename a file" - 10
     b: "  time          date and time (RTC)    rm <file>             delete a file" - 10
     b: "  uptime        time since boot        format                erase the disk" - 10
-    b: "  mem           memory size" - 10
-    b: "  cpu           processor (CPUID)" - 10
-    b: "  snake         play Snake" - 10
-    b: "  crash         test the panic screen" - 10
-    b: "  reboot        restart" - 10
-    s: "  shutdown      power off (ACPI)" - 10
+    b: "  mem           memory size            Programs on the disk:" - 10
+    b: "  cpu           processor (CPUID)      hello [name]          first program" - 10
+    b: "  snake         play Snake             edit <file>           text editor" - 10
+    b: "  beep          PC speaker sound       paint                 draw with a mouse" - 10
+    b: "  crash         test the panic screen  mandel                Mandelbrot set" - 10
+    b: "  reboot        restart                music                 play a melody" - 10
+    b: "  shutdown      power off (ACPI)       ticker                background task" - 10
+    b: "                                       ps / kill <id>        list / stop tasks" - 10
+    s: "Type a program name to run it. '&' - in the background, Ctrl+C - stop it." - 10
 
 ; ---- clear
 cmd_clear:
@@ -234,8 +247,9 @@ cmd_about:
     ret
 
 about3 b: " disk sectors) + 512-byte boot sector." - 10
-       b: "  32-bit protected mode, IDT, PIC, PIT timer (100 Hz), PS/2 keyboard," - 10
-       s: "  VGA text console, CMOS real-time clock." - 10
+       b: "  32-bit protected mode with paging, preemptive multitasking (7 programs)," - 10
+       b: "  system calls (int 0x80), PS/2 keyboard and mouse, VGA text and 320x200" - 10
+       s: "  graphics, PC speaker, ATA disk with GasemFS, CMOS real-time clock." - 10
 
 ; ---- echo
 cmd_echo:
@@ -385,27 +399,7 @@ cmd_uptime:
 
 ; ---- mem: объём памяти из CMOS (как его сообщает BIOS)
 cmd_mem:
-    mov al - 0x35                ; память выше 16 МБ, блоками по 64 КБ
-    call cmos_read
-    mov ah - al
-    mov al - 0x34
-    call cmos_read
-    movzx eax - ax
-    chk eax - eax
-    jfz .small
-    shr eax - 4                  ; 64 КБ * 16 = 1 МБ
-    add eax - 16
-    jmp .print
-.small:
-    mov al - 0x31                ; память выше 1 МБ, в килобайтах
-    call cmos_read
-    mov ah - al
-    mov al - 0x30
-    call cmos_read
-    movzx eax - ax
-    shr eax - 10
-    inc eax
-.print:
+    call mem_size
     call puts - "Memory: "
     call print_dec
     jmp puts - " MB\n"

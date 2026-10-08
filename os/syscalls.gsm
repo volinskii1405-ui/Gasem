@@ -1,0 +1,149 @@
+; =====================================================================
+;  Системные вызовы: int 0x80. Номер — в eax, аргументы — в ebx, ecx,
+;  edx, esi, edi, результат — в eax (номера — в abi.gsm).
+;  Шлюз прерывания запрещает прерывания, поэтому вызов не прерывается
+;  на полпути; ждущие вызовы (getkey, sleep) отдают процессор сами.
+; =====================================================================
+
+b 32
+syscall:
+    cmp eax - SYS_COUNT
+    jfae .bad
+    call [sys_table+eax*4]
+    iretd
+.bad:
+    mov eax - -1
+    iretd
+
+sys_table:
+    d: task_exit - sys_putc - puts - sys_printn - sys_getkey - sys_pollkey
+    d: clear_screen - sys_setpos - sys_color - sys_cursor - sys_ticks - sys_sleep
+    d: sys_random - sys_taskid - sys_read - sys_write - sys_gfx - gfx_pixel
+    d: gfx_rect - gfx_text - gfx_palette - sys_mouse - sys_sound - sys_yield
+
+sys_putc:
+    mov al - bl
+    jmp putc
+
+sys_printn:
+    mov eax - ebx
+    jmp print_int
+
+sys_getkey:
+    call getchar
+    movzx eax - al
+    ret
+
+sys_pollkey:
+    call kb_poll
+    movzx eax - al
+    ret if not zero
+    xor eax - eax
+    ret
+
+sys_setpos:                      ; строка 1..24, столбец 0..79
+    ret if ebx = 0 or ebx > 24 or ecx > 79
+    push ebx
+    mov eax - ebx
+    mov ebx - ecx
+    call set_pos
+    pop ebx
+    ret
+
+sys_color:
+    mov [cur_attr] - bl
+    ret
+
+sys_cursor:
+    jmp cursor_hide if ebx = 0
+    jmp cursor_show
+
+sys_ticks:
+    mov eax - [ticks]
+    ret
+
+sys_sleep:
+    push ecx
+    mov ecx - ebx
+    call sleep
+    pop ecx
+    ret
+
+sys_random:
+    jmp rand
+
+sys_taskid:
+    mov eax - [cur_task]
+    ret
+
+sys_yield:
+    int 0x81
+    ret
+
+; sys_read: файл esi → в буфер edi (не больше ecx байт). → eax = размер файла или -1
+sys_read:
+    push ecx - esi - edi
+    mov eax - -1
+    jmp .done if byte [fs_ready] = 0
+    push edi
+    call fs_find
+    mov eax - edi
+    pop edi
+    jmp .no if carry
+    push edi
+    mov edi - eax
+    mov eax - ecx                ; размер буфера
+    call fs_load                 ; → ecx = размер файла
+    pop edi
+    jmp .no if carry
+    push ecx
+    cmp ecx - eax                ; копируем не больше размера буфера
+    jfbe .copy
+    mov ecx - eax
+.copy:
+    mov esi - FILE_BUF
+    cld
+    rep movsb
+    pop eax                      ; результат — размер файла
+.done:
+    pop ecx - esi - edi
+    ret
+.no:
+    mov eax - -1
+    jmp .done
+
+; sys_write: записать ecx байт из edi в файл esi. → eax = 0 или -1
+sys_write:
+    push ecx - esi - edi
+    mov eax - -1
+    jmp .done if byte [fs_ready] = 0 or byte [esi] = 0 or ecx > FILE_MAX
+    push ecx - esi
+    mov esi - edi
+    mov edi - FILE_BUF
+    cld
+    rep movsb
+    pop ecx - esi
+    call fs_save
+    mov eax - 0
+    jfnc .done
+    mov eax - -1
+.done:
+    pop ecx - esi - edi
+    ret
+
+sys_gfx:
+    jmp gfx_on if ebx != 0
+    jmp gfx_off
+
+sys_mouse:
+    mov eax - [mouse_x]
+    mov ebx - [mouse_y]
+    movzx ecx - byte [mouse_buttons]
+    ret
+
+sys_sound:
+    push eax
+    mov eax - [cur_task]
+    mov [sound_owner] - eax
+    pop eax
+    jmp sound_on

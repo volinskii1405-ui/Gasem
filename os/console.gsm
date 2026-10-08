@@ -24,9 +24,12 @@ clear_screen:
     popad
     ret
 
-; putc: вывести символ al (10 — перевод строки, 8 — забой, 9 — табуляция)
+; putc: вывести символ al (10 — перевод строки, 8 — забой, 9 — табуляция).
+;       Прерывания на это время запрещены: печатать могут несколько задач.
 putc:
     pushad
+    pushfd
+    cli
     if al = 10
         call line_feed
     elif al = 8
@@ -53,6 +56,7 @@ putc:
         end
     end
     call update_cursor
+    popfd
     popad
     ret
 

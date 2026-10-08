@@ -1,6 +1,6 @@
 ; =====================================================================
 ;  Прерывания: таблица IDT, исключения процессора, контроллер PIC,
-;  системный таймер PIT (100 Гц).
+;  системный таймер PIT (100 Гц) — он же переключает задачи.
 ; =====================================================================
 
 b 32
@@ -22,6 +22,15 @@ idt_init:
     call set_gate
     mov ecx - 0x21               ; IRQ 1 — клавиатура
     mov eax - irq1_keyboard
+    call set_gate
+    mov ecx - 0x2C               ; IRQ 12 — мышь
+    mov eax - irq12_mouse
+    call set_gate
+    mov ecx - 0x80               ; системные вызовы программ
+    mov eax - syscall
+    call set_gate
+    mov ecx - 0x81               ; yield: отдать процессор другой задаче
+    mov eax - irq_yield
     call set_gate
     lidt [idt_ptr]
     popad
@@ -46,7 +55,7 @@ idt_ptr:
 int_ignore:
     iretd
 
-; pic_init: перенести IRQ 0..15 на векторы 0x20..0x2F, разрешить IRQ 0 и 1
+; pic_init: перенести IRQ 0..15 на векторы 0x20..0x2F, разрешить IRQ 0, 1, 2 и 12
 pic_init:
     push eax
     mov al - 0x11                ; ICW1: инициализация
@@ -63,9 +72,9 @@ pic_init:
     mov al - 1                   ; ICW4: режим 8086
     out 0x21 - al
     out 0xA1 - al
-    mov al - 0xFC                ; маска: открыты только IRQ 0 и IRQ 1
+    mov al - 0xF8                ; маска: таймер, клавиатура и каскад (IRQ 2)
     out 0x21 - al
-    mov al - 0xFF
+    mov al - 0xEF                ; на ведомом — только мышь (IRQ 12)
     out 0xA1 - al
     pop eax
     ret
@@ -84,7 +93,8 @@ pit_init:
     pop eax
     ret
 
-; IRQ 0: таймер. Раз в секунду обновляет строку состояния.
+; IRQ 0: таймер. Раз в секунду обновляет строку состояния,
+;        каждый тик передаёт процессор следующей задаче.
 irq0_timer:
     pushad
     inc dword [ticks]
@@ -92,14 +102,10 @@ irq0_timer:
     xor edx - edx
     mov ecx - 100
     div ecx                      ; eax = секунды, edx = остаток
-    chk edx - edx
-    jfnz .eoi
-    call status_update
-.eoi:
+    call status_update if edx = 0
     mov al - 0x20                ; конец прерывания для PIC
     out 0x20 - al
-    popad
-    iretd
+    jmp switch_task
 
 ; ---------------------------------------------------------------------
 ;  Исключения процессора. 32 заглушки по 5 байт: «call exc_common».
@@ -119,51 +125,71 @@ exc_common:
     div ecx
     dec eax
     mov ebx - eax                ; ebx = номер исключения
+    xor ecx - ecx                ; ecx = код ошибки (если есть)
+    mov edx - ERROR_CODE_MASK
+    bt edx - ebx
+    jfnc .no_code
+    pop ecx
+.no_code:
+    pop edx                      ; edx = eip, на котором случилось исключение
+    mov eax - [cur_task]
+    jmp app_crash if eax != 0 and eax < MAX_TASKS
 
-    mov byte [cur_attr] - 0x4F   ; белый на красном
+    mov byte [cur_attr] - 0x4F   ; ошибка в ядре: белый на красном
     call clear_screen
     call cursor_hide
     mov eax - 3
-    mov ecx - 0
-    xchg ebx - ecx
+    push ebx
+    xor ebx - ebx
     call set_pos
-    xchg ebx - ecx
+    pop ebx
     call puts - "   *** KERNEL PANIC ***\n\n"
     call puts - "   CPU exception #"
+    call exc_describe
+    call puts - "\n\n   The system has been halted. Restart the computer.\n"
+.halt:
+    hlt
+    jmp .halt
+
+; app_crash: исключение в программе — завершить её, а система работает дальше
+app_crash:
+    push ecx
+    mov ecx - eax
+    call task_kill               ; заодно вернёт текстовый режим
+    imul eax - ecx - Task.size
+    pop ecx
+    call newline if dword [cur_col] != 0
+    push ebx
+    lea esi - [tasks+eax+Task.name]
+    call puts_attr - esi - 0x0C
+    call puts_attr - " crashed: exception #" - 0x0C
+    pop ebx
+    call exc_describe
+    call newline
+    int 0x81                     ; задачи больше нет — сюда не вернёмся
+
+; exc_describe: «N: название», EIP = edx и код ошибки ecx (если он есть у исключения ebx)
+exc_describe:
     mov eax - ebx
     call print_dec
-    mov al - ':'
-    call putc
-    mov al - ' '
-    call putc
+    call puts - ": "
     mov esi - exc_reserved
     cmp ebx - 20
     jfae .named
     mov esi - [exc_names+ebx*4]
 .named:
     call puts
-    call newline
-
-    mov edx - ERROR_CODE_MASK
-    xor ecx - ecx                ; ecx = код ошибки (если есть)
-    bt edx - ebx
-    jfnc .no_code
-    pop ecx
-.no_code:
-    call puts - "   EIP = 0x"
-    pop eax                      ; eip, на котором случилось исключение
+    call puts - "\n   EIP = 0x"
+    mov eax - edx
     call print_hex32
-    mov edx - ERROR_CODE_MASK
-    bt edx - ebx
-    jfnc .halt_msg
+    mov eax - ERROR_CODE_MASK
+    bt eax - ebx
+    jfnc .done
     call puts - "   error code = 0x"
     mov eax - ecx
     call print_hex32
-.halt_msg:
-    call puts - "\n\n   The system has been halted. Restart the computer.\n"
-.halt:
-    hlt
-    jmp .halt
+.done:
+    ret
 
 exc_reserved s: "Reserved"
 

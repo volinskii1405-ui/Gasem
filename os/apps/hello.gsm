@@ -1,0 +1,29 @@
+; =====================================================================
+;  Первая программа для GasemOS: приветствие, аргументы, номер задачи.
+;      hello            Hello, world!
+;      hello Gasem      Hello, Gasem!
+; =====================================================================
+
+include "../sdk.gsm"
+
+main:
+    color 0x0B
+    print "Hello, "
+    if byte [esi] != 0
+        print esi                ; аргументы из командной строки
+    else
+        print "world"
+    end
+    print "!\n"
+    color 0x07
+    print "I am a program from the disk, running as task #"
+    taskid
+    printn eax
+    print ".\nThe system has been running for "
+    ticks
+    let eax - "eax / 100"
+    printn eax
+    print " seconds.\n"
+    ret                          ; ret из main завершает программу
+
+pool

@@ -1,0 +1,353 @@
+; =====================================================================
+;  edit — текстовый редактор GasemOS.
+;      edit note.txt
+;  Стрелки, Home, End, PgUp, PgDn — перемещение; Backspace и Delete —
+;  удаление; Tab — четыре пробела. Ctrl+S — сохранить, Ctrl+Q или
+;  Esc — выйти. Файл целиком лежит в памяти (до 32 КБ, как в GasemFS).
+; =====================================================================
+
+include "../sdk.gsm"
+
+TEXT      = HEAP                 ; текст файла
+CAPACITY  = 32768
+TOP       = 1                    ; строки экрана 1..23 — текст (строка 0 — у системы)
+ROWS      = 23
+BAR       = TEXT_VGA+24*160      ; строка 24 — строка редактора
+TEXT_ATTR = 0x07
+BAR_ATTR  = 0x70                 ; чёрный на сером
+TILDE     = 0x087E               ; «~» тёмно-серым — строки после конца файла
+BLANK     = 0x0720
+CTRL_S    = 19
+CTRL_Q    = 17
+
+length  d: 0                     ; длина текста
+cur     d: 0                     ; курсор — смещение в тексте
+top     d: 0                     ; смещение первой видимой строки
+left    d: 0                     ; первый видимый столбец
+dirty   b: 0                     ; есть несохранённые изменения
+armed   b: 0                     ; Ctrl+Q с несохранёнными изменениями уже нажат
+quit    b: 0
+message d: 0                     ; сообщение в строке редактора (0 — подсказка)
+fname   b-24
+
+main:
+    mov edi - fname              ; имя файла — первое слово аргументов
+    xor ecx - ecx
+    while byte [esi] != 0 and byte [esi] != ' ' and ecx < 23
+        movsb
+        inc ecx
+    end
+    if ecx = 0
+        print "Usage: edit <file>\n"
+        ret
+    end
+    readfile fname - TEXT - CAPACITY
+    if signed eax < 0
+        mov dword [message] - "New file"
+        xor eax - eax
+    end
+    mov eax - CAPACITY if eax > CAPACITY
+    mov [length] - eax
+    call strip_cr
+    cursor 1
+    while byte [quit] = 0
+        call scroll_to_cursor
+        call draw
+        getkey
+        call key - eax
+    end
+    cls
+    ret
+
+; strip_cr: убрать символы \r (файлы из Windows)
+proc strip_cr uses esi - edi
+    xor esi - esi
+    xor edi - edi
+    while esi < [length]
+        mov al - [TEXT+esi]
+        if al != 13
+            mov [TEXT+edi] - al
+            inc edi
+        end
+        inc esi
+    end
+    mov [length] - edi
+end
+
+; ---------------------------------------------------------------- клавиши
+proc key - eax uses ebx - ecx - edx
+    mov dword [message] - 0
+    mov byte [armed] - 0 if al != CTRL_Q and al != KEY_ESC
+    if al >= ' ' and al <= '~'
+        call insert - eax
+    elif al = 10
+        call insert - 10
+    elif al = 9
+        for ecx - 0 - 4
+            call insert - ' '
+        end
+    elif al = 8
+        if dword [cur] != 0
+            dec dword [cur]
+            call delete
+        end
+    elif al = KEY_DEL
+        call delete
+    elif al = KEY_LEFT
+        dec dword [cur] if dword [cur] != 0
+    elif al = KEY_RIGHT
+        mov edx - [cur]
+        inc dword [cur] if edx < [length]
+    elif al = KEY_UP
+        call move_up
+    elif al = KEY_DOWN
+        call move_down
+    elif al = KEY_HOME
+        call line_start - [cur]
+        mov [cur] - eax
+    elif al = KEY_END
+        call line_end - [cur]
+        mov [cur] - eax
+    elif al = KEY_PGUP
+        for ecx - 0 - ROWS-1
+            call move_up
+        end
+    elif al = KEY_PGDN
+        for ecx - 0 - ROWS-1
+            call move_down
+        end
+    elif al = CTRL_S
+        call save
+    elif al = CTRL_Q or al = KEY_ESC
+        if byte [dirty] != 0 and byte [armed] = 0
+            mov byte [armed] - 1
+            mov dword [message] - "Not saved! ^Q to quit"
+        else
+            mov byte [quit] - 1
+        end
+    end
+end
+
+; insert: вставить символ al в позицию курсора
+proc insert - eax uses ecx - edx - esi - edi
+    mov ecx - [length]
+    if ecx >= CAPACITY
+        mov dword [message] - "File is full (32 KB)"
+        return
+    end
+    lea esi - [TEXT+ecx-1]       ; хвост текста сдвигается на 1 вправо, с конца
+    lea edi - [TEXT+ecx]
+    sub ecx - [cur]
+    std
+    rep movsb
+    cld
+    mov edx - [cur]
+    mov [TEXT+edx] - al
+    inc dword [cur]
+    inc dword [length]
+    mov byte [dirty] - 1
+end
+
+; delete: удалить символ под курсором
+proc delete uses ecx - esi - edi
+    mov edi - [cur]
+    mov ecx - [length]
+    return if edi >= ecx
+    sub ecx - edi
+    dec ecx                      ; столько байт после удаляемого
+    lea edi - [TEXT+edi]
+    lea esi - [edi+1]
+    cld
+    rep movsb
+    dec dword [length]
+    mov byte [dirty] - 1
+end
+
+; save: записать файл на диск
+proc save
+    writefile fname - TEXT - dword [length]
+    if eax = 0
+        mov byte [dirty] - 0
+        mov dword [message] - "Saved"
+    else
+        mov dword [message] - "Could not save!"
+    end
+end
+
+; ---------------------------------------------------------------- строки
+; line_start: начало строки, в которой лежит смещение eax → eax
+proc line_start - eax
+    while eax != 0 and byte [TEXT+eax-1] != 10
+        dec eax
+    end
+end
+
+; line_end: конец строки (перевод строки или конец текста) → eax
+proc line_end - eax
+    while eax < [length] and byte [TEXT+eax] != 10
+        inc eax
+    end
+end
+
+; count_lines: сколько переводов строки между смещениями esi и edx → eax
+proc count_lines - esi - edx uses esi
+    xor eax - eax
+    while esi < edx
+        inc eax if byte [TEXT+esi] = 10
+        inc esi
+    end
+end
+
+; column: столбец курсора → eax
+proc column uses ebx
+    call line_start - [cur]
+    mov ebx - [cur]
+    sub ebx - eax
+    mov eax - ebx
+end
+
+proc move_up uses ebx - ecx
+    call line_start - [cur]
+    return if eax = 0            ; первая строка
+    lea ecx - [eax-1]            ; конец предыдущей строки
+    call column
+    mov ebx - eax
+    call line_start - ecx
+    add eax - ebx                ; тот же столбец, но не дальше конца строки
+    mov eax - ecx if eax > ecx
+    mov [cur] - eax
+end
+
+proc move_down uses ebx - ecx
+    call column
+    mov ebx - eax
+    call line_end - [cur]
+    return if eax >= [length]    ; последняя строка
+    inc eax                      ; начало следующей
+    lea ecx - [eax+ebx]
+    call line_end - eax
+    mov ecx - eax if ecx > eax
+    mov [cur] - ecx
+end
+
+; scroll_to_cursor: прокрутить так, чтобы курсор был виден
+proc scroll_to_cursor uses ebx
+    mov eax - [cur]
+    if eax < [top]
+        call line_start - eax
+        mov [top] - eax
+    end
+    while 1
+        call count_lines - [top] - [cur]
+        break if eax < ROWS
+        call line_end - [top]    ; на строку вниз
+        inc eax
+        mov [top] - eax
+    end
+    call column
+    mov [left] - eax if eax < [left]
+    mov ebx - [left]
+    add ebx - 80
+    if eax >= ebx
+        sub eax - 79
+        mov [left] - eax
+    end
+end
+
+; ---------------------------------------------------------------- экран
+proc draw uses ebx - ecx - edx - esi - edi - ebp
+    mov esi - [top]
+    xor edx - edx                ; 1 — текст кончился
+    for ebx - TOP - TOP+ROWS
+        let edi - "ebx*160 + TEXT_VGA"
+        xor ecx - ecx            ; столбец в строке текста
+        if edx != 0
+            mov word [edi] - TILDE
+            inc ecx
+        else
+            while esi < [length] and byte [TEXT+esi] != 10
+                mov eax - ecx
+                sub eax - [left]
+                if eax < 80      ; левее left разность «огромная» — не рисуем
+                    lea ebp - [edi+eax*2]
+                    mov al - [TEXT+esi]
+                    mov ah - TEXT_ATTR
+                    mov [ebp] - ax
+                end
+                inc ecx
+                inc esi
+            end
+            if esi >= [length]
+                mov edx - 1
+            else
+                inc esi          ; перевод строки
+            end
+            sub ecx - [left]     ; сколько клеток уже занято
+            xor ecx - ecx if signed ecx < 0
+        end
+        while ecx < 80
+            mov word [edi+ecx*2] - BLANK
+            inc ecx
+        end
+    end
+
+    mov edi - BAR                ; строка редактора
+    mov ecx - 80
+    mov ax - BAR_ATTR*256+' '
+    cld
+    rep stosw
+    mov edi - BAR+2
+    call bar_str - fname - edi
+    call bar_str - " [modified]" - edi if byte [dirty] != 0
+    mov edi - BAR+2*38
+    call bar_str - "Ln " - edi
+    call count_lines - 0 - [cur]
+    inc eax
+    call bar_num - eax - edi
+    call bar_str - ", Col " - edi
+    call column
+    inc eax
+    call bar_num - eax - edi
+    mov edi - BAR+2*56
+    mov esi - [message]
+    mov esi - "^S Save  ^Q Quit" if esi = 0
+    call bar_str - esi - edi
+
+    call count_lines - [top] - [cur]   ; курсор
+    lea ebx - [eax+TOP]
+    call column
+    sub eax - [left]
+    locate ebx - eax
+end
+
+; bar_str: строка esi в строку редактора с клетки edi → edi за последним символом
+proc bar_str - esi - edi uses esi
+    while byte [esi] != 0 and edi < BAR+160
+        mov al - [esi]
+        mov ah - BAR_ATTR
+        stosw
+        inc esi
+    end
+end
+
+; bar_num: число eax в строку редактора с клетки edi → edi за последней цифрой
+proc bar_num - eax - edi uses ebx - ecx - edx
+    mov ebx - 10
+    xor ecx - ecx
+    repeat
+        xor edx - edx
+        div ebx
+        push edx
+        inc ecx
+        chk eax - eax
+    until zero
+    repeat
+        pop eax
+        add al - '0'
+        mov ah - BAR_ATTR
+        stosw
+        dec ecx
+    until zero
+end
+
+pool

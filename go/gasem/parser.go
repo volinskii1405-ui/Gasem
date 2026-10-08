@@ -13,7 +13,7 @@ import (
 var dataUnits = map[string]int{"b": 1, "w": 2, "d": 4, "q": 8, "s": 1} // s: — строка с нулём в конце
 var sizeWords = map[string]int{"byte": 8, "word": 16, "dword": 32, "qword": 64, "b": 8, "w": 16, "d": 32, "q": 64}
 var jumpWords = map[string]bool{"short": true, "near": true, "far": true}
-var directives = map[string]bool{"og": true, "align": true, "incbin": true, "include": true, "do": true,
+var directives = map[string]bool{"og": true, "align": true, "incbin": true, "incprog": true, "include": true, "do": true,
 	"equ": true, "pool": true, "args": true}
 
 // Reserved — слова, которые нельзя использовать как имена.
@@ -255,6 +255,7 @@ type Parser struct {
 	Defs     []*Def                            // все объявления имён
 	lastDef  map[string]*Def
 	structs  map[string]*structInfo
+	programs []string // программы, которые собирают эту через incprog
 }
 
 func NewParser() *Parser {
@@ -670,6 +671,16 @@ func (p *Parser) parseStatement(ts *tokenStream, loc *SourceLoc, baseDir string,
 		}
 		return p.finishStmt(&IncbinStmt{Data: data, Loc: loc}, emit)
 
+	case "incprog":
+		if !emit {
+			ts.error("incprog нельзя повторять через &&")
+		}
+		ts.next()
+		path := p.parsePath(ts, "incprog")
+		ts.expectEnd("строки")
+		data := p.compileProgram(resolvePath(path, baseDir), path, loc)
+		return p.finishStmt(&IncbinStmt{Data: data, Loc: loc}, emit)
+
 	case "do":
 		return p.finishStmt(p.parseDo(ts, loc), emit)
 
@@ -984,6 +995,40 @@ func pyStrName(name string, ok bool) string {
 		return "None"
 	}
 	return name
+}
+
+// compileProgram — incprog: собрать отдельную программу (со своим og и своими именами)
+// и вернуть её байты. Её ошибки и предупреждения добавляются к ошибкам этой программы.
+func (p *Parser) compileProgram(full, path string, loc *SourceLoc) []byte {
+	chain := append([]string{}, p.programs...)
+	if len(p.includeStack) > 0 {
+		chain = append(chain, p.includeStack[0])
+	}
+	apath := absPath(full)
+	for _, c := range chain {
+		if c == apath {
+			failAt(fmt.Sprintf("программа '%s' собирает саму себя через incprog", path), loc, NoCol)
+		}
+	}
+	if len(chain) >= maxIncludeDepth {
+		failAt("слишком глубокая вложенность incprog", loc, NoCol)
+	}
+	sub := NewParser()
+	sub.ReadFile = p.ReadFile
+	sub.programs = chain
+	sub.ParseFile(full, loc)
+	sub.finish()
+	if len(sub.errors) > 0 {
+		p.errors = append(p.errors, sub.errors...)
+		return nil
+	}
+	res, errs := newAssembler(sub).assemble()
+	if errs != nil {
+		p.errors = append(p.errors, errs.List...)
+		return nil
+	}
+	p.warnings = append(p.warnings, sub.warnings...)
+	return res.Code
 }
 
 func (p *Parser) parsePath(ts *tokenStream, what string) string {

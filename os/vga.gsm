@@ -1,0 +1,370 @@
+; =====================================================================
+;  Графический режим VGA 320x200, 256 цветов (режим 13h) без BIOS:
+;  регистры VGA программируются напрямую. Переход в графику портит
+;  шрифт (он лежит в плоскости 2 видеопамяти), текст на экране и
+;  палитру, поэтому при загрузке всё это запоминается, а при возврате
+;  в текстовый режим — восстанавливается.
+; =====================================================================
+
+b 32
+gfx_active b: 0                  ; 1 — включена графика
+gfx_owner  d: 0                  ; задача, которая включила графику
+
+; значения регистров: misc, 5 sequencer, 25 CRTC, 9 graphics, 21 attribute
+VGA_REGS = 1+5+25+9+21
+text_regs  b-VGA_REGS            ; текстовый режим — каким его оставил BIOS
+mode13_regs:
+    b: 0x63
+    b: 0x03 - 0x01 - 0x0F - 0x00 - 0x0E
+    b: 0x5F - 0x4F - 0x50 - 0x82 - 0x54 - 0x80 - 0xBF - 0x1F
+    b: 0x00 - 0x41 - 0x00 - 0x00 - 0x00 - 0x00 - 0x00 - 0x00
+    b: 0x9C - 0x0E - 0x8F - 0x28 - 0x40 - 0x96 - 0xB9 - 0xA3 - 0xFF
+    b: 0x00 - 0x00 - 0x00 - 0x00 - 0x00 - 0x40 - 0x05 - 0x0F - 0xFF
+    b: 0x00 - 0x01 - 0x02 - 0x03 - 0x04 - 0x05 - 0x06 - 0x07
+    b: 0x08 - 0x09 - 0x0A - 0x0B - 0x0C - 0x0D - 0x0E - 0x0F
+    b: 0x41 - 0x00 - 0x0F - 0x00 - 0x00
+
+; vga_init: запомнить регистры текстового режима, шрифт и палитру
+vga_init:
+    pushad
+    mov edi - text_regs
+    call vga_save_regs
+    call font_plane              ; шрифт: 256 символов по 32 байта
+    mov esi - TEXT_VGA
+    mov edi - FONT_SAVE
+    mov ecx - 8192/4
+    cld
+    rep movsd
+    mov esi - text_regs
+    call vga_set_regs
+    mov dx - 0x3C7               ; палитра: 256 * (R, G, B)
+    mov al - 0
+    out dx - al
+    mov dx - 0x3C9
+    mov edi - DAC_SAVE
+    for ecx - 0 - 768
+        in al - dx
+        stosb
+    end
+    popad
+    ret
+
+; gfx_on: включить графику 320x200 (экран чёрный, стандартная палитра)
+gfx_on:
+    pushad
+    pushfd
+    cli
+    if byte [gfx_active] = 0
+        mov esi - TEXT_VGA       ; запомнить текстовый экран
+        mov edi - TEXT_SAVE
+        mov ecx - 4000/4
+        cld
+        rep movsd
+        mov esi - mode13_regs
+        call vga_set_regs
+        call gfx_default_palette
+        mov edi - GFX
+        mov ecx - GFX_W*GFX_H/4
+        xor eax - eax
+        rep stosd
+        mov byte [gfx_active] - 1
+    end
+    mov eax - [cur_task]
+    mov [gfx_owner] - eax
+    popfd
+    popad
+    ret
+
+; gfx_off: вернуть текстовый режим: регистры, шрифт, палитру и текст на экране
+gfx_off:
+    pushad
+    pushfd
+    cli
+    if byte [gfx_active] != 0
+        call font_plane
+        mov esi - FONT_SAVE
+        mov edi - TEXT_VGA
+        mov ecx - 8192/4
+        cld
+        rep movsd
+        mov esi - text_regs
+        call vga_set_regs
+        mov dx - 0x3C8
+        mov al - 0
+        out dx - al
+        inc dx
+        mov esi - DAC_SAVE
+        for ecx - 0 - 768
+            nxtb
+            out dx - al
+        end
+        mov esi - TEXT_SAVE
+        mov edi - TEXT_VGA
+        mov ecx - 4000/4
+        rep movsd
+        call update_cursor
+        mov byte [gfx_active] - 0
+    end
+    mov dword [gfx_owner] - 0
+    popfd
+    popad
+    ret
+
+; font_plane: текстовый режим с доступом к плоскости 2 (шрифту) через окно 0xB8000
+font_plane:
+    pushad
+    mov esi - text_regs
+    call vga_set_regs
+    mov dx - 0x3C4
+    mov ax - 0x0402              ; запись только в плоскость 2
+    out dx - ax
+    mov ax - 0x0604              ; последовательная адресация (без чёт/нечет)
+    out dx - ax
+    mov dx - 0x3CE
+    mov ax - 0x0204              ; чтение из плоскости 2
+    out dx - ax
+    mov ax - 0x0005              ; режим записи 0, без чёт/нечет
+    out dx - ax
+    mov ax - 0x0C06              ; окно 0xB8000, без чёт/нечет
+    out dx - ax
+    popad
+    ret
+
+; vga_save_regs: прочитать текущие регистры VGA в edi (VGA_REGS байт)
+vga_save_regs:
+    pushad
+    cld
+    mov dx - 0x3CC
+    in al - dx
+    stosb
+    mov dx - 0x3C4
+    mov ecx - 5
+    call .indexed
+    mov dx - 0x3D4
+    mov ecx - 25
+    call .indexed
+    mov dx - 0x3CE
+    mov ecx - 9
+    call .indexed
+    for ecx - 0 - 21
+        mov dx - 0x3DA           ; сброс триггера индекс/данные
+        in al - dx
+        mov dx - 0x3C0
+        mov al - cl
+        out dx - al
+        inc dx
+        in al - dx
+        stosb
+    end
+    mov dx - 0x3DA
+    in al - dx
+    mov dx - 0x3C0
+    mov al - 0x20                ; снова включить изображение
+    out dx - al
+    popad
+    ret
+.indexed:                        ; ecx регистров через порт индекса dx
+    xor ebx - ebx
+    while ebx < ecx
+        mov al - bl
+        out dx - al
+        inc dx
+        in al - dx
+        stosb
+        dec dx
+        inc ebx
+    end
+    ret
+
+; vga_set_regs: записать регистры VGA из esi (VGA_REGS байт)
+vga_set_regs:
+    pushad
+    cld
+    mov dx - 0x3C2
+    nxtb
+    out dx - al
+    mov dx - 0x3C4
+    for ecx - 0 - 5
+        call .put
+    end
+    mov dx - 0x3D4               ; снять защиту записи с регистров CRTC 0..7
+    mov al - 0x11
+    out dx - al
+    inc dx
+    in al - dx
+    and al - 0x7F
+    out dx - al
+    dec dx
+    for ecx - 0 - 25
+        mov al - cl
+        out dx - al
+        inc dx
+        nxtb
+        and al - 0x7F if cl = 0x11
+        out dx - al
+        dec dx
+    end
+    mov dx - 0x3CE
+    for ecx - 0 - 9
+        call .put
+    end
+    for ecx - 0 - 21
+        mov dx - 0x3DA
+        in al - dx
+        mov dx - 0x3C0
+        mov al - cl
+        out dx - al
+        nxtb
+        out dx - al
+    end
+    mov dx - 0x3DA
+    in al - dx
+    mov dx - 0x3C0
+    mov al - 0x20
+    out dx - al
+    popad
+    ret
+.put:                            ; индекс cl, значение — следующий байт таблицы
+    mov al - cl
+    out dx - al
+    inc dx
+    nxtb
+    out dx - al
+    dec dx
+    ret
+
+; gfx_default_palette: 0..15 — цвета текстового режима, 16..31 — оттенки серого,
+;                      32..255 — радуга: красный → жёлтый → … → красный → белый
+gfx_default_palette:
+    pushad
+    mov dx - 0x3C8
+    mov al - 0
+    out dx - al
+    inc dx
+    mov esi - cga_colors
+    mov ecx - 48
+    cld
+.cga:
+    nxtb
+    out dx - al
+    loop .cga
+    for ecx - 0 - 16             ; серый
+        let eax - "ecx*4 + ecx/4"
+        out dx - al
+        out dx - al
+        out dx - al
+    end
+    for ecx - 0 - 224            ; радуга: 7 участков по 32 цвета
+        let eax - "(ecx & 31) * 2"
+        mov [pal_ramp+2] - al    ; нарастает 0..62
+        mov ah - 63
+        sub ah - al
+        mov [pal_ramp+3] - ah    ; убывает 63..1
+        let esi - "ecx/32*3 + rainbow"
+        call .channel            ; R, G, B
+        call .channel
+        call .channel
+    end
+    popad
+    ret
+.channel:                        ; следующий байт рецепта → значение канала в порт
+    nxtb
+    movzx ebx - al
+    mov al - [pal_ramp+ebx]
+    out dx - al
+    ret
+
+pal_ramp b: 0 - 63 - 0 - 0       ; 0, максимум, нарастает, убывает
+rainbow:                         ; R, G, B каждого участка (номера в pal_ramp)
+    b: 1 - 2 - 0 - 3 - 1 - 0 - 0 - 1 - 2 - 0 - 3 - 1
+    b: 2 - 0 - 1 - 1 - 0 - 3 - 1 - 2 - 2
+
+cga_colors:                      ; по 6 бит на канал (0..63)
+    b: 0 - 0 - 0  - 0 - 0 - 42  - 0 - 42 - 0  - 0 - 42 - 42
+    b: 42 - 0 - 0 - 42 - 0 - 42 - 42 - 21 - 0 - 42 - 42 - 42
+    b: 21 - 21 - 21 - 21 - 21 - 63 - 21 - 63 - 21 - 21 - 63 - 63
+    b: 63 - 21 - 21 - 63 - 21 - 63 - 63 - 63 - 21 - 63 - 63 - 63
+
+; ---------------------------------------------------------------------
+;  Рисование (системные вызовы SYS_PIXEL, SYS_RECT, SYS_GTEXT, SYS_PALETTE)
+; ---------------------------------------------------------------------
+
+; gfx_pixel: точка (ebx, ecx) цветом dl; за краем экрана — ничего
+gfx_pixel:
+    ret if ebx >= GFX_W or ecx >= GFX_H
+    push eax
+    let eax - "ecx*GFX_W + ebx"
+    mov [GFX+eax] - dl
+    pop eax
+    ret
+
+; gfx_rect: прямоугольник x=ebx, y=ecx, ширина esi, высота edi, цвет dl
+gfx_rect:
+    pushad
+    add esi - ebx                ; esi, edi — правый нижний угол (не включая)
+    add edi - ecx
+    xor ebx - ebx if signed ebx < 0
+    xor ecx - ecx if signed ecx < 0
+    mov esi - GFX_W if signed esi > GFX_W
+    mov edi - GFX_H if signed edi > GFX_H
+    jmp .done if signed ebx >= esi or ecx >= edi
+    sub esi - ebx                ; ширина после обрезки
+    mov al - dl
+    cld
+    while ecx < edi
+        push ecx - edi
+        let edi - "ecx*GFX_W + ebx + GFX"
+        mov ecx - esi
+        rep stosb
+        pop ecx - edi
+        inc ecx
+    end
+.done:
+    popad
+    ret
+
+; gfx_text: строка esi шрифтом 8x16 в точке (ebx, ecx) цветом dl (фон не трогается)
+gfx_text:
+    pushad
+    while byte [esi] != 0
+        movzx ebp - byte [esi]
+        shl ebp - 5
+        add ebp - FONT_SAVE      ; 32 байта на символ, видны первые 16 строк
+        for edi - 0 - 16
+            push ebx - ecx
+            add ecx - edi
+            mov al - [ebp+edi]
+            repeat
+                chk al - 0x80
+                call gfx_pixel if not zero
+                inc ebx
+                shl al - 1
+            until zero
+            pop ebx - ecx
+        end
+        add ebx - 8
+        inc esi
+    end
+    popad
+    ret
+
+; gfx_palette: цвет номер ebx = ecx (0xRRGGBB)
+gfx_palette:
+    pushad
+    mov dx - 0x3C8
+    mov al - bl
+    out dx - al
+    inc dx
+    mov eax - ecx
+    shr eax - 18                 ; R: старшие 6 бит
+    out dx - al
+    mov eax - ecx
+    shr eax - 10                 ; G
+    and al - 63
+    out dx - al
+    mov eax - ecx
+    shr eax - 2                  ; B
+    and al - 63
+    out dx - al
+    popad
+    ret

@@ -1,0 +1,141 @@
+; =====================================================================
+;  Мышь PS/2: второй порт контроллера клавиатуры, IRQ 12.
+;  Мышь присылает пакеты по 3 байта: кнопки и знаки, сдвиг по X, по Y.
+;  Координаты — в точках графического экрана: x 0..319, y 0..199.
+; =====================================================================
+
+b 32
+mouse_x       d: GFX_W/2
+mouse_y       d: GFX_H/2
+mouse_buttons b: 0
+mouse_cycle   b: 0               ; какой байт пакета ждём
+mouse_packet  b-3
+mouse_found   b: 0               ; 1 — мышь ответила при включении
+
+; mouse_init: включить второй порт контроллера и поток пакетов мыши
+mouse_init:
+    pushad
+    call kbc_write_cmd - 0xA8    ; включить порт мыши
+    call kbc_write_cmd - 0x20    ; прочитать байт настроек контроллера
+    call kbc_read
+    or al - 2                    ; разрешить IRQ 12
+    and al - 0xDF                ; включить тактирование мыши
+    mov bl - al
+    call kbc_write_cmd - 0x60
+    call kbc_write_data - bl
+    call mouse_cmd - 0xF6        ; настройки по умолчанию
+    call mouse_cmd - 0xF4        ; присылать пакеты
+    if al = 0xFA
+        mov byte [mouse_found] - 1
+    end
+    popad
+    ret
+
+; mouse_cmd: команда al мыши → al = ответ (0xFA — принято)
+args mouse_cmd - al
+mouse_cmd:
+    push eax
+    call kbc_write_cmd - 0xD4    ; следующий байт — для мыши
+    pop eax
+    call kbc_write_data
+    jmp kbc_read
+
+args kbc_write_cmd - al
+kbc_write_cmd:
+    call kbc_wait_write
+    out 0x64 - al
+    ret
+
+args kbc_write_data - al
+kbc_write_data:
+    call kbc_wait_write
+    out 0x60 - al
+    ret
+
+kbc_wait_write:                  ; ждать, пока освободится входной буфер
+    push eax - ecx
+    mov ecx - 100000
+    repeat
+        in al - 0x64
+        chk al - 2
+        break if zero
+        dec ecx
+    until zero
+    pop eax - ecx
+    ret
+
+; kbc_read: дождаться байта от контроллера → al (0 — не дождались)
+kbc_read:
+    push ecx
+    mov ecx - 100000
+    repeat
+        in al - 0x64
+        chk al - 1
+        jfnz .ready
+        dec ecx
+    until zero
+    pop ecx
+    xor al - al
+    ret
+.ready:
+    in al - 0x60
+    pop ecx
+    ret
+
+; IRQ 12: очередной байт пакета мыши
+irq12_mouse:
+    pushad
+    in al - 0x64                 ; есть байт и он от мыши? (прерывание могло
+    and al - 0x21                ; остаться от ответов при включении)
+    cmp al - 0x21
+    jfne .eoi
+    in al - 0x60
+    movzx ebx - byte [mouse_cycle]
+    if ebx = 0                   ; первый байт: бит 3 всегда 1, переполнений нет —
+        mov ah - al              ; так находим начало пакета
+        and ah - 0xC8
+        cmp ah - 8
+        jfne .eoi
+    end
+    mov [mouse_packet+ebx] - al
+    inc ebx
+    if ebx = 3
+        xor ebx - ebx
+        call mouse_move
+    end
+    mov [mouse_cycle] - bl
+.eoi:
+    mov al - 0x20                ; конец прерывания: ведомый и ведущий PIC
+    out 0xA0 - al
+    out 0x20 - al
+    popad
+    iretd
+
+; mouse_move: разобрать пакет — кнопки и сдвиг (9 бит со знаком)
+mouse_move:
+    movzx eax - byte [mouse_packet]
+    chk al - 0xC0                ; переполнение — пакет пропускаем
+    ret if not zero
+    mov cl - al
+    and cl - 7
+    mov [mouse_buttons] - cl
+    movzx edx - byte [mouse_packet+1]
+    chk al - 0x10
+    jfz .x
+    or edx - 0xFFFFFF00
+.x:
+    add edx - [mouse_x]
+    xor edx - edx if signed edx < 0
+    mov edx - GFX_W-1 if signed edx >= GFX_W
+    mov [mouse_x] - edx
+    movzx edx - byte [mouse_packet+2]
+    chk al - 0x20
+    jfz .y
+    or edx - 0xFFFFFF00
+.y:
+    neg edx                      ; у мыши ось Y направлена вверх, у экрана — вниз
+    add edx - [mouse_y]
+    xor edx - edx if signed edx < 0
+    mov edx - GFX_H-1 if signed edx >= GFX_H
+    mov [mouse_y] - edx
+    ret

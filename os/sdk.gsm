@@ -1,0 +1,243 @@
+; =====================================================================
+;  Gasem SDK — всё, что нужно программе для GasemOS.
+;
+;      include "../sdk.gsm"      ; путь — от файла программы
+;      main:                     ; сюда ядро передаёт управление
+;          print "Hello!\n"
+;          ret                   ; или exit
+;
+;  Программа работает в 32-битном режиме с адреса APP_BASE, и у неё
+;  свои 4 МБ памяти: от APP_BASE до APP_BASE+APP_SIZE. Всё, что за самой
+;  программой, заполнено нулями — там удобно держать большие буферы
+;  (с адреса HEAP). При запуске esi указывает на строку аргументов.
+;  Стек (32 КБ) выделяет ядро.
+;
+;  Программы из os/apps попадают на диск при сборке системы. Свою можно
+;  собрать и положить в готовый образ:
+;      gasem build prog.gsm -o prog.bin
+;      python3 os/gasemfs.py gasemos.img put prog.bin
+;  и запустить в GasemOS командой prog.
+;
+;  Макросы ниже — обёртки системных вызовов (int 0x80). Они меняют
+;  только eax (туда же кладут результат), кроме mouse — тот возвращает
+;  ещё ebx и ecx. Аргументы — числа, строки, 32-битные регистры или
+;  dword-память; порядок регистров неважен (передаются через стек).
+; =====================================================================
+
+include "abi.gsm"
+
+og APP_BASE
+b 32
+HEAP = APP_BASE+0x100000         ; свободная память программы: 3 МБ нулей
+
+    d: APP_MAGIC                 ; заголовок программы: "GAPP"
+    d: main                      ; и адрес точки входа
+
+macro sys - n                    ; системный вызов номер n
+    mov eax - n
+    int 0x80
+end
+
+; ---- текст
+macro exit                       ; завершить программу
+    sys SYS_EXIT
+end
+
+macro print - text               ; print "Hi\n" / print esi
+    push esi
+    push text
+    pop esi
+    sys SYS_PUTS
+    pop esi
+end
+
+macro putc - char                ; putc 'A' / putc eax — один символ
+    push ebx
+    push char
+    pop ebx
+    sys SYS_PUTC
+    pop ebx
+end
+
+macro printn - num               ; число со знаком в десятичном виде
+    push ebx
+    push num
+    pop ebx
+    sys SYS_PRINTN
+    pop ebx
+end
+
+macro cls                        ; очистить экран (строки 1..24)
+    sys SYS_CLEAR
+end
+
+macro locate - row - col         ; курсор: строка 1..24, столбец 0..79
+    push ebx - ecx
+    push col
+    push row
+    pop ebx
+    pop ecx
+    sys SYS_SETPOS
+    pop ebx - ecx
+end
+
+macro color - attr               ; цвет текста: фон*16 + цвет
+    push ebx
+    push attr
+    pop ebx
+    sys SYS_COLOR
+    pop ebx
+end
+
+macro cursor - on                ; 1 — показать курсор, 0 — спрятать
+    push ebx
+    push on
+    pop ebx
+    sys SYS_CURSOR
+    pop ebx
+end
+
+; ---- клавиатура, время, задачи
+macro getkey                     ; → eax: клавиша (ждёт нажатия)
+    sys SYS_GETKEY
+end
+
+macro pollkey                    ; → eax: клавиша или 0
+    sys SYS_POLLKEY
+end
+
+macro ticks                      ; → eax: тиков с загрузки (100 в секунду)
+    sys SYS_TICKS
+end
+
+macro sleep - n                  ; спать n тиков (по 10 мс)
+    push ebx
+    push n
+    pop ebx
+    sys SYS_SLEEP
+    pop ebx
+end
+
+macro random                     ; → eax: случайное число
+    sys SYS_RANDOM
+end
+
+macro taskid                     ; → eax: номер своей задачи
+    sys SYS_TASKID
+end
+
+macro yield                      ; отдать процессор другим задачам
+    sys SYS_YIELD
+end
+
+; ---- файлы
+macro readfile - name - buf - size   ; → eax: размер файла или -1
+    push ecx - esi - edi
+    push size
+    push buf
+    push name
+    pop esi
+    pop edi
+    pop ecx
+    sys SYS_READ
+    pop ecx - esi - edi
+end
+
+macro writefile - name - buf - size  ; → eax: 0 или -1
+    push ecx - esi - edi
+    push size
+    push buf
+    push name
+    pop esi
+    pop edi
+    pop ecx
+    sys SYS_WRITE
+    pop ecx - esi - edi
+end
+
+; ---- графика 320x200, 256 цветов (видеопамять — GFX, байт на точку)
+macro graphics                   ; включить графику (при выходе ядро вернёт текст)
+    push ebx
+    mov ebx - 1
+    sys SYS_GFX
+    pop ebx
+end
+
+macro textmode                   ; вернуться в текстовый режим
+    push ebx
+    xor ebx - ebx
+    sys SYS_GFX
+    pop ebx
+end
+
+macro pixel - x - y - c
+    push ebx - ecx - edx
+    push c
+    push y
+    push x
+    pop ebx
+    pop ecx
+    pop edx
+    sys SYS_PIXEL
+    pop ebx - ecx - edx
+end
+
+macro rect - x - y - width - height - c   ; закрашенный прямоугольник
+    push ebx - ecx - edx - esi - edi
+    push c
+    push height
+    push width
+    push y
+    push x
+    pop ebx
+    pop ecx
+    pop esi
+    pop edi
+    pop edx
+    sys SYS_RECT
+    pop ebx - ecx - edx - esi - edi
+end
+
+macro gtext - x - y - c - text   ; текст шрифтом 8x16 (фон не закрашивается)
+    push ebx - ecx - edx - esi
+    push text
+    push c
+    push y
+    push x
+    pop ebx
+    pop ecx
+    pop edx
+    pop esi
+    sys SYS_GTEXT
+    pop ebx - ecx - edx - esi
+end
+
+macro palette - index - rgb      ; цвет номер index = 0xRRGGBB
+    push ebx - ecx
+    push rgb
+    push index
+    pop ebx
+    pop ecx
+    sys SYS_PALETTE
+    pop ebx - ecx
+end
+
+macro mouse                      ; → eax = x, ebx = y, ecx = кнопки (MOUSE_LEFT ...)
+    sys SYS_MOUSE
+end
+
+; ---- звук
+macro sound - hz                 ; включить звук частотой hz герц
+    push ebx
+    push hz
+    pop ebx
+    sys SYS_SOUND
+    pop ebx
+end
+
+macro nosound
+    push ebx
+    xor ebx - ebx
+    sys SYS_SOUND
+    pop ebx
+end
